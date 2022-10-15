@@ -15,10 +15,10 @@
 
 #include <ygm/comm.hpp>
 
+#include <saltatlas/dnnd/big_ann_bench_data_reader.hpp>
 #include <saltatlas/dnnd/detail/point_store.hpp>
 #include <saltatlas/dnnd/detail/utilities/general.hpp>
 #include <saltatlas/dnnd/detail/utilities/string_cast.hpp>
-#include <saltatlas/dnnd/ann_bench_data_reader.hpp>
 
 namespace saltatlas::dndetail {
 

@@ -5,18 +5,20 @@
 
 #include <ygm/comm.hpp>
 
+#include <saltatlas/dnnd/detail/neighbor.hpp>
 #include <saltatlas/dnnd/detail/point_store.hpp>
 #include <saltatlas/dnnd/detail/utilities/general.hpp>
 #include <saltatlas/dnnd/detail/utilities/string_cast.hpp>
 
-namespace saltatlas::ann_bench_data_reader {
+namespace saltatlas::big_ann_bench_data_reader {
 
 template <typename id_t, typename T, typename pstore_alloc>
 inline void read_points(
-    std::string_view                              file_name,
-    dndetail::point_store<id_t, T, pstore_alloc> &local_point_store,
+    const std::string_view                       &file_name,
     const std::function<int(const id_t &id)>     &point_partitioner,
-    ygm::comm &comm, const bool verbose) {
+    const bool                                    verbose,
+    dndetail::point_store<id_t, T, pstore_alloc> &local_point_store,
+    ygm::comm                                    &comm) {
   std::ifstream ifs(file_name.data(), std::ios::binary);
   if (!ifs.is_open()) {
     comm.cerr0() << "Failed to open " << file_name << std::endl;
@@ -109,43 +111,49 @@ inline void read_queries(
 }
 
 template <typename id_t, typename distance_t>
-inline void read_ground_truths(std::string_view                      file_name,
-                               std::vector<std::vector<id_t>>       &friends,
-                               std::vector<std::vector<distance_t>> &distances,
-                               const bool                            verbose) {
+inline void read_ground_truths(
+    std::string_view                                                file_name,
+    std::vector<std::vector<dndetail::neighbor<id_t, distance_t>>> &gt,
+    const bool                                                      verbose) {
   std::ifstream ifs(file_name.data(), std::ios::binary);
   if (!ifs.is_open()) {
     std::cerr << "Failed to open " << file_name << std::endl;
     MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
   }
 
-  uint32_t num_queries = 0;
-  uint32_t num_friends = 0;
+  uint32_t num_queries   = 0;
+  uint32_t num_neighbors = 0;
   if (!ifs.read(reinterpret_cast<char *>(&num_queries), sizeof(num_queries)) ||
-      !ifs.read(reinterpret_cast<char *>(&num_friends), sizeof(num_friends))) {
+      !ifs.read(reinterpret_cast<char *>(&num_neighbors),
+                sizeof(num_neighbors))) {
     std::cerr << "Failed to read from " << file_name << std::endl;
     MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
   }
 
   if (verbose) {
     std::cout << "#of point\t" << num_queries << std::endl;
-    std::cout << "#of friends\t" << num_friends << std::endl;
+    std::cout << "#of neighbors\t" << num_neighbors << std::endl;
   }
 
-  const auto friends_size = num_friends * sizeof(id_t);
-  friends.emplace_back(friends_size);
+  gt.resize(num_queries);
 
-  const auto distances_size = num_friends * sizeof(distance_t);
-  distances.emplace_back(distances_size);
-
+  std::vector<id_t>       buf_neighbors(num_neighbors);
+  std::vector<distance_t> buf_distances(num_neighbors);
   for (id_t id = 0; id < num_queries; ++id) {
-    if (!ifs.read(reinterpret_cast<char *>(friends.back().data()),
-                  friends_size) ||
-        !ifs.read(reinterpret_cast<char *>(distances.back().data()),
+    const auto neighbors_size = num_neighbors * sizeof(id_t);
+    const auto distances_size = num_neighbors * sizeof(distance_t);
+    if (!ifs.read(reinterpret_cast<char *>(buf_neighbors.data()),
+                  neighbors_size) ||
+        !ifs.read(reinterpret_cast<char *>(buf_distances.data()),
                   distances_size)) {
       std::cerr << "Failed to read from " << file_name << std::endl;
       MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
     }
+
+    for (std::size_t i = 0; i < num_neighbors; ++i) {
+      gt[id].emplace_back(dndetail::neighbor<id_t, distance_t>{
+          .id = buf_neighbors[i], .distance = buf_distances[i]});
+    }
   }
 }
-}  // namespace saltatlas::ann_bench_data_reader
+}  // namespace saltatlas::big_ann_bench_data_reader
