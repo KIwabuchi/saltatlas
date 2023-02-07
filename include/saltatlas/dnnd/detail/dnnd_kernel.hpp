@@ -121,6 +121,14 @@ class dnnd_kernel {
 
   ygm::comm& comm() { return m_comm; }
 
+  void show_statistics() const {
+    m_comm.cout0() << "\nNeighbor Suggestion Message" << std::endl;
+    priv_show_msg_store_statistics(m_neighbor_suggestion_msg_store);
+
+    m_comm.cout0() << "\nNeighbor Check Message" << std::endl;
+    priv_show_msg_store_statistics(m_neighbor_check_msg_store);
+  }
+
  private:
   using self_type = dnnd_kernel<PointStore, Distance>;
 
@@ -565,6 +573,11 @@ class dnnd_kernel {
 #if SALTATLAS_DNND_SHOW_BASIC_MSG_STATISTICS
       ++local_this->m_num_feature_msgs;
 #endif
+
+      if (local_this->m_neighbor_check_msg_store.count(u2) == 0)
+        local_this->m_neighbor_check_msg_store[u2] = 0;
+      ++local_this->m_neighbor_check_msg_store[u2];
+
       std::vector<feature_element_type> f(
           local_this->m_point_store.feature_vector(u1).begin(),
           local_this->m_point_store.feature_vector(u1).end());
@@ -645,6 +658,13 @@ class dnnd_kernel {
 #if SALTATLAS_DNND_SHOW_BASIC_MSG_STATISTICS
       ++m_num_neighbor_suggestion_msgs;
 #endif
+
+      const uint64_t x = ((uint64_t)pair.first << 32) | pair.second;
+      if (m_neighbor_suggestion_msg_store.count(x) == 0) {
+        m_neighbor_suggestion_msg_store[x] = 0;
+      }
+      ++m_neighbor_suggestion_msg_store[x];
+
       m_comm.async(m_point_partitioner(pair.first), neighbor_updater{}, m_this,
                    pair.first, pair.second);
     }
@@ -712,6 +732,41 @@ class dnnd_kernel {
     m_comm.cf_barrier();
   }
 
+  template <typename T>
+  void priv_show_msg_store_statistics(
+      const std::unordered_map<T, std::size_t>& store) const {
+    std::vector<std::size_t> log2_table;
+    for (const auto& item : store) {
+      const auto x     = item.second;
+      const auto x_lo2 = std::log2(x);
+      if (log2_table.size() <= x_lo2) {
+        log2_table.resize(x_lo2 + 1, 0);
+      }
+      ++log2_table[x_lo2];
+    }
+    const auto max_n = m_comm.all_reduce_max(log2_table.size());
+    static std::vector<std::size_t> main_table;
+    if (m_comm.rank0()) main_table.resize(max_n, 0);
+    m_comm.cf_barrier();
+    for (std::size_t i = 0; i < log2_table.size(); ++i) {
+      if (log2_table[i] == 0) continue;
+      m_comm.async(
+          0,
+          [](const std::size_t idx, const std::size_t count) {
+            main_table[idx] += count;
+          },
+          i, log2_table[i]);
+    }
+    m_comm.barrier();
+
+    if (m_comm.rank0()) {
+      std::cout << "#of duplicates\tCount" << std::endl;
+      for (std::size_t i = 0; i < main_table.size(); ++i) {
+        std::cout << std::pow(2, i) << "\t" << main_table[i] << std::endl;
+      }
+    }
+  }
+
   option                  m_option;
   const point_store_type& m_point_store;
   const point_partitioner m_point_partitioner;
@@ -729,6 +784,9 @@ class dnnd_kernel {
   std::size_t m_num_distance_msgs{0};
   std::size_t m_num_pruned_distance_msgs{0};
 #endif
+  static_assert(sizeof(id_type) == sizeof(uint64_t) / 2, "Too large ID size");
+  std::unordered_map<uint64_t, std::size_t> m_neighbor_suggestion_msg_store;
+  std::unordered_map<id_type, std::size_t>  m_neighbor_check_msg_store;
 };
 
 }  // namespace saltatlas::dndetail

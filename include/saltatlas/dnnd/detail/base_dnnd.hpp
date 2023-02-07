@@ -130,6 +130,7 @@ class base_dnnd {
                                    mini_batch_size);
     kernel.construct(m_data_core->knn_index);
     m_data_core->index_k = k;
+    kernel.show_statistics();
   }
 
   /// \brief Construct an k-NN index.
@@ -148,6 +149,7 @@ class base_dnnd {
                                    mini_batch_size);
     kernel.construct(init_index, m_data_core->knn_index);
     m_data_core->index_k = k;
+    kernel.show_statistics();
   }
 
   /// \brief Construct an k-NN index.
@@ -169,6 +171,7 @@ class base_dnnd {
                                    mini_batch_size);
     kernel.construct(init_index, m_data_core->knn_index);
     m_data_core->index_k = k;
+    kernel.show_statistics();
   }
 
   /// \brief Apply some optimizations to an already constructed index aiming at
