@@ -584,7 +584,7 @@ class dnnd_kernel {
       ++local_this->m_neighbor_check_msg_store[x];
 
 #if SALTATLAS_DNND_REMOVE_DUPLICATE_MSG
-      if (local_this->m_neighbor_check_msg_store.count(x) > 1) {
+      if (local_this->m_neighbor_check_msg_store.at(x) > 1) {
         return;
       }
 #endif
@@ -677,7 +677,7 @@ class dnnd_kernel {
       ++m_neighbor_suggestion_msg_store[x];
 
 #if SALTATLAS_DNND_REMOVE_DUPLICATE_MSG
-      if (m_neighbor_suggestion_msg_store.count(x) > 1) {
+      if (m_neighbor_suggestion_msg_store.at(x) > 1) {
         return;
       }
 #endif
