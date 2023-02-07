@@ -574,9 +574,10 @@ class dnnd_kernel {
       ++local_this->m_num_feature_msgs;
 #endif
 
-      if (local_this->m_neighbor_check_msg_store.count(u2) == 0)
-        local_this->m_neighbor_check_msg_store[u2] = 0;
-      ++local_this->m_neighbor_check_msg_store[u2];
+      const uint64_t x = ((uint64_t)u1 << 32) | u2;
+      if (local_this->m_neighbor_check_msg_store.count(x) == 0)
+        local_this->m_neighbor_check_msg_store[x] = 0;
+      ++local_this->m_neighbor_check_msg_store[x];
 
       std::vector<feature_element_type> f(
           local_this->m_point_store.feature_vector(u1).begin(),
@@ -786,7 +787,7 @@ class dnnd_kernel {
 #endif
   static_assert(sizeof(id_type) == sizeof(uint64_t) / 2, "Too large ID size");
   std::unordered_map<uint64_t, std::size_t> m_neighbor_suggestion_msg_store;
-  std::unordered_map<id_type, std::size_t>  m_neighbor_check_msg_store;
+  std::unordered_map<uint64_t, std::size_t> m_neighbor_check_msg_store;
 };
 
 }  // namespace saltatlas::dndetail
