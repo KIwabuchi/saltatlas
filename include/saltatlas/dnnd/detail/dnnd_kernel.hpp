@@ -678,7 +678,7 @@ class dnnd_kernel {
 
 #if SALTATLAS_DNND_REMOVE_DUPLICATE_MSG
       if (m_neighbor_suggestion_msg_store.at(x) > 1) {
-        return;
+        continue;
       }
 #endif
       m_comm.async(m_point_partitioner(pair.first), neighbor_updater{}, m_this,
