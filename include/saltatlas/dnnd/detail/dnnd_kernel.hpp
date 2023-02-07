@@ -761,9 +761,10 @@ class dnnd_kernel {
     m_comm.barrier();
 
     if (m_comm.rank0()) {
-      std::cout << "#of duplicates\tCount" << std::endl;
+      std::cout << "#of duplicates\tCount\t#of total msgs" << std::endl;
       for (std::size_t i = 0; i < main_table.size(); ++i) {
-        std::cout << std::pow(2, i) << "\t" << main_table[i] << std::endl;
+        const auto n = std::pow(2, i);
+        std::cout << n << "\t" << main_table[i] << "\t" << n *  main_table[i] << std::endl;
       }
     }
   }
