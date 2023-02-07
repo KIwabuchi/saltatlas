@@ -17,6 +17,10 @@
 #define SALTATLAS_DNND_PRUNE_LONG_DISTANCE_MSGS 1
 #endif
 
+#ifndef SALTATLAS_DNND_REMOVE_DUPLICATE_MSG
+#define SALTATLAS_DNND_REMOVE_DUPLICATE_MSG 1
+#endif
+
 #include <algorithm>
 #include <functional>
 #include <iostream>
@@ -579,6 +583,12 @@ class dnnd_kernel {
         local_this->m_neighbor_check_msg_store[x] = 0;
       ++local_this->m_neighbor_check_msg_store[x];
 
+#if SALTATLAS_DNND_REMOVE_DUPLICATE_MSG
+      if (local_this->m_neighbor_check_msg_store.count(x) > 1) {
+        return;
+      }
+#endif
+
       std::vector<feature_element_type> f(
           local_this->m_point_store.feature_vector(u1).begin(),
           local_this->m_point_store.feature_vector(u1).end());
@@ -666,6 +676,11 @@ class dnnd_kernel {
       }
       ++m_neighbor_suggestion_msg_store[x];
 
+#if SALTATLAS_DNND_REMOVE_DUPLICATE_MSG
+      if (m_neighbor_suggestion_msg_store.count(x) > 1) {
+        return;
+      }
+#endif
       m_comm.async(m_point_partitioner(pair.first), neighbor_updater{}, m_this,
                    pair.first, pair.second);
     }
@@ -764,7 +779,8 @@ class dnnd_kernel {
       std::cout << "#of duplicates\tCount\t#of total msgs" << std::endl;
       for (std::size_t i = 0; i < main_table.size(); ++i) {
         const auto n = std::pow(2, i);
-        std::cout << n << "\t" << main_table[i] << "\t" << n *  main_table[i] << std::endl;
+        std::cout << n << "\t" << main_table[i] << "\t" << n * main_table[i]
+                  << std::endl;
       }
     }
   }
