@@ -403,6 +403,6 @@ endif ()
 
 if (SALTATLAS_MAIN_PROJECT)
     add_subdirectory(examples)
-    add_subdirectory(utility)
+    add_subdirectory(tools)
     add_subdirectory(test)
 endif ()
