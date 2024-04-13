@@ -306,7 +306,7 @@ if (SALTATLAS_USE_METALL)
         FetchContent_Declare(
             Metall
             GIT_REPOSITORY https://github.com/LLNL/metall.git
-            GIT_TAG master
+            GIT_TAG develop
         )
         FetchContent_GetProperties(Metall)
         if (Metall_POPULATED)
@@ -337,6 +337,16 @@ if (SALTATLAS_USE_METALL)
         saltatlas INTERFACE stdc++fs Threads::Threads Metall::Metall
     )
 endif ()
+
+#
+# Perroht
+#
+set(JUST_INSTALL_PERROHT_HEADER TRUE)
+FetchContent_Declare(Perroht
+        GIT_REPOSITORY https://github.com/LLNL/Perroht.git
+        GIT_TAG main
+)
+FetchContent_MakeAvailable(Perroht)
 
 option(TEST_WITH_SLURM "Run tests with Slurm" OFF)
 
