@@ -14,3 +14,5 @@ if (SALTATLAS_USE_METALL)
 	add_executable(dnnd_transfer_pm_datastore dnnd_transfer_pm_datastore.cpp)
 	target_link_libraries(dnnd_transfer_pm_datastore PUBLIC saltatlas)
 endif()
+
+add_subdirectory(shm_nng_query)

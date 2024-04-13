@@ -9,6 +9,9 @@ The dataset consists of the following files:
   - The file is in the white-space separated value (WSV) format.
   - The distance metric is L2 (Euclidean) distance.
 
+- [point_5-4_id.txt](./point_5-4_id.txt):
+  - Contains the same data as point_5-4.txt with point IDs in the first column.
+
 - [query_5-4.txt](./query_5-4.txt):
   - This file consists of 5 search queries.
   - Each query point is close to one of the clusters in the point_5-4.txt file.

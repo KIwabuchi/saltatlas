@@ -7,9 +7,9 @@
 
 #include <cassert>
 #include <cstdlib>
-#include <string>
 #include <iostream>
 #include <sstream>
+#include <string>
 #include <vector>
 
 namespace saltatlas::neo_dnnd::ndndtl {
@@ -69,7 +69,7 @@ inline double str_cast<double>(const std::string &input) {
 template <typename T>
 inline std::vector<T> str_split(const std::string &input) {
   std::vector<T> result;
-  std::string token;
+  std::string    token;
   for (std::stringstream ss(input); ss >> token;) {
     result.push_back(str_cast<T>(token));
   }
@@ -92,9 +92,9 @@ inline std::vector<char> str_split(const std::string &input) {
 /// \return Vector of T.
 template <typename T>
 inline std::vector<T> str_split(const std::string &input,
-                                const char delimiter) {
-  std::vector<T> result;
-  std::string token;
+                                const char         delimiter) {
+  std::vector<T>     result;
+  std::string        token;
   std::istringstream token_stream(input);
   while (std::getline(token_stream, token, delimiter)) {
     result.push_back(str_cast<T>(token));

@@ -3,8 +3,8 @@
 //
 // SPDX-License-Identifier: MIT
 
-//  This file contains public domain code from SMHasher
-//  (https://github.com/aappleby/smhasher/tree/master).
+// This file contains public domain code from SMHasher
+// (https://github.com/aappleby/smhasher/tree/master).
 //
 // From the MurmurHash3 file:
 // MurmurHash3 was written by Austin Appleby, and is placed in the public

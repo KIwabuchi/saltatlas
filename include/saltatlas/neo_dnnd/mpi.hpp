@@ -6,13 +6,13 @@
 #pragma once
 
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 #include <functional>
 #include <iostream>
-#include <vector>
-#include <cassert>
 #include <numeric>
 #include <optional>
+#include <vector>
 
 #include <mpi.h>
 
@@ -68,14 +68,12 @@ class communicator {
     priv_get_local_comm_info();
   }
 
-  communicator(const communicator&) = delete;
+  communicator(const communicator&)            = delete;
   communicator& operator=(const communicator&) = delete;
-  communicator(communicator&&) = delete;
-  communicator& operator=(communicator&&) = delete;
+  communicator(communicator&&)                 = delete;
+  communicator& operator=(communicator&&)      = delete;
 
-  ~communicator() {
-    DNND2_CHECK_MPI(::MPI_Comm_free(&m_local_comm));
-  }
+  ~communicator() { DNND2_CHECK_MPI(::MPI_Comm_free(&m_local_comm)); }
 
   int rank() const { return m_rank; }
   int size() const { return m_size; }
@@ -190,7 +188,7 @@ class communicator {
 
   template <typename T>
   T all_node_reduce_sum(const T send) const {
-    T sum;
+    T       sum;
     const T buf = local_rank() == 0 ? send : 0;
     all_reduce(buf, sum, MPI_SUM);
     return sum;
@@ -198,7 +196,7 @@ class communicator {
 
   template <typename T>
   T all_node_reduce_max(const T send) const {
-    T max;
+    T       max;
     const T buf = local_rank() == 0 ? send : std::numeric_limits<T>::min();
     all_reduce(buf, max, MPI_MAX);
     return max;
@@ -206,7 +204,7 @@ class communicator {
 
   template <typename T>
   T all_node_reduce_min(const T send) const {
-    T min;
+    T       min;
     const T buf = local_rank() == 0 ? send : std::numeric_limits<T>::max();
     all_reduce(buf, min, MPI_MIN);
     return min;
@@ -261,8 +259,8 @@ class communicator {
   /// the data is sent in batches.
   template <typename T>
   void sendrecv_arb_size(const int pair_rank, const std::vector<T>& send_buffer,
-                         std::vector<T>& recv_buffer,
-                         ::MPI_Datatype data_type = data_type::get<T>(),
+                         std::vector<T>&   recv_buffer,
+                         ::MPI_Datatype    data_type = data_type::get<T>(),
                          const std::size_t batch_size_byte = 1 << 26) {
     if (pair_rank == m_rank) {
       recv_buffer = send_buffer;  // TODO: avoid copy?
@@ -270,13 +268,13 @@ class communicator {
     }
 
     const std::size_t batch_size = batch_size_byte / sizeof(T);
-    const int num_batches = (send_buffer.size() + batch_size - 1) / batch_size;
-    bool received_all = false;
+    const int num_batches  = (send_buffer.size() + batch_size - 1) / batch_size;
+    bool      received_all = false;
     recv_buffer.clear();
     for (int i = 0; i < num_batches || !received_all; ++i) {
       const bool reached_last = i >= num_batches - 1;
-      const auto off = std::min(batch_size * i, send_buffer.size());
-      const auto send_size = std::min(batch_size, send_buffer.size() - off);
+      const auto off          = std::min(batch_size * i, send_buffer.size());
+      const auto send_size    = std::min(batch_size, send_buffer.size() - off);
       received_all |= priv_sendrecv_arb_size_helper(
           pair_rank, send_buffer.data() + off, send_size, reached_last,
           data_type, recv_buffer);
@@ -286,8 +284,8 @@ class communicator {
   /// \brief sendrecv_arb_size optimized version.
   template <typename T>
   void sendrecv_arb_size_opt(const int pair_rank, std::vector<T>& send_buffer,
-                             std::vector<T>& recv_buffer,
-                             ::MPI_Datatype data_type = data_type::get<T>(),
+                             std::vector<T>&   recv_buffer,
+                             ::MPI_Datatype    data_type = data_type::get<T>(),
                              const std::size_t batch_size_byte = 1 << 26) {
     if (pair_rank == m_rank) {
       recv_buffer = std::move(send_buffer);
@@ -299,7 +297,7 @@ class communicator {
 
   template <typename T>
   void all_to_all(const std::vector<T>& send_buffer,
-                  std::vector<T>& recv_buffer) {
+                  std::vector<T>&       recv_buffer) {
     if (send_buffer.size() * sizeof(T) > std::numeric_limits<int>::max()) {
       std::cerr << "Too large data size to send: "
                 << send_buffer.size() * sizeof(T) << std::endl;
@@ -313,9 +311,9 @@ class communicator {
   }
 
   template <typename T>
-  void all_to_all_v(const std::vector<T>& send_buffer,
+  void all_to_all_v(const std::vector<T>&   send_buffer,
                     const std::vector<int>& send_counts,
-                    std::vector<T>& recv_buffer) {
+                    std::vector<T>&         recv_buffer) {
     if (send_buffer.size() * sizeof(T) > (1ULL << 31ULL)) {
       std::cerr << "Too large data size to send: "
                 << send_buffer.size() * sizeof(T) << std::endl;
@@ -343,9 +341,9 @@ class communicator {
 
   template <typename T>
   void all_to_all_v(const std::vector<std::vector<T>>& to_send,
-                    std::vector<T>& recv_buffer) {
+                    std::vector<T>&                    recv_buffer) {
     std::vector<int> send_counts(m_size, 0);
-    std::size_t num_send = 0;
+    std::size_t      num_send = 0;
     for (int r = 0; r < to_send.size(); ++r) {
       send_counts[r] = to_send[r].size();
       num_send += to_send[r].size();
@@ -375,11 +373,11 @@ class communicator {
   }
 
   template <typename T>
-  int priv_sendrecv_arb_size_helper(const int pair_rank,
-                                    const T* const send_buffer,
-                                    const int send_count,
-                                    const bool reached_last,
-                                    ::MPI_Datatype data_type,
+  int priv_sendrecv_arb_size_helper(const int       pair_rank,
+                                    const T* const  send_buffer,
+                                    const int       send_count,
+                                    const bool      reached_last,
+                                    ::MPI_Datatype  data_type,
                                     std::vector<T>& recv_buffer) {
     MPI_Request isend_request;
     if (send_count * sizeof(T) > (1ULL << 31ULL)) {
@@ -411,10 +409,10 @@ class communicator {
 
   ::MPI_Comm m_comm;
   ::MPI_Comm m_local_comm;
-  int m_rank;
-  int m_size;
-  int m_local_rank;
-  int m_local_size;
+  int        m_rank;
+  int        m_size;
+  int        m_local_rank;
+  int        m_local_size;
 };
 
 /// \brief Execute a user-defined function for each unique pair of ranks.
@@ -445,12 +443,13 @@ inline constexpr void pair_wise_all_to_all(
     const bool left_block = (comm_rank / block_size) % 2 == 0;
     for (int i = 0; i < block_size; ++i) {
       const int pair_blocK_begin =
-          (left_block)
-              ? saltatlas::neo_dnnd::utility::round_down(comm_rank + block_size, block_size)
-              : saltatlas::neo_dnnd::utility::round_down(comm_rank - block_size, block_size);
+          (left_block) ? saltatlas::neo_dnnd::utility::round_down(
+                             comm_rank + block_size, block_size)
+                       : saltatlas::neo_dnnd::utility::round_down(
+                             comm_rank - block_size, block_size);
       const int in_block_pos = (left_block) ? (comm_rank + i) % block_size
                                             : (comm_rank - i) % block_size;
-      const int pair_rank = pair_blocK_begin + in_block_pos;
+      const int pair_rank    = pair_blocK_begin + in_block_pos;
       func(pair_rank);
     }
   }
@@ -466,7 +465,7 @@ inline std::vector<int> get_pair_wise_all_to_all_pattern(const int comm_size,
 }
 
 inline void show_task_distribution(const std::vector<std::size_t>& table) {
-  const auto sum = std::accumulate(table.begin(), table.end(), std::size_t(0));
+  const auto sum  = std::accumulate(table.begin(), table.end(), std::size_t(0));
   const auto mean = (double)sum / (double)table.size();
   std::cout << "Assigned " << sum << " tasks to " << table.size() << " workers"
             << std::endl;
@@ -489,7 +488,7 @@ inline void show_task_distribution(const std::vector<std::size_t>& table) {
 inline std::size_t assign_tasks(const std::size_t num_local_tasks,
                                 const std::size_t batch_size,
                                 const int mpi_rank, const int mpi_size,
-                                const bool verbose,
+                                const bool     verbose,
                                 const MPI_Comm mpi_comm = MPI_COMM_WORLD) {
   if (batch_size == 0) {
     return num_local_tasks;

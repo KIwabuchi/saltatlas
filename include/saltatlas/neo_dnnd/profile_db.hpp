@@ -5,14 +5,14 @@
 
 #pragma once
 
-#include <cassert>
-#include <limits>
-#include <cmath>
-#include <unordered_map>
-#include <vector>
 #include <algorithm>
-#include <utility>
+#include <cassert>
+#include <cmath>
+#include <limits>
 #include <string>
+#include <unordered_map>
+#include <utility>
+#include <vector>
 
 #include <boost/json/src.hpp>
 
@@ -59,7 +59,7 @@ class profile_db {
  private:
   struct entry {
     std::size_t count;
-    double total;
+    double      total;
   };
 
   std::unordered_map<std::string, entry> m_db;

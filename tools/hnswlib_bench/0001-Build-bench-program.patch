@@ -1,0 +1,51 @@
+From f6e102fe0409421431caaad2f1c86b25fca743c6 Mon Sep 17 00:00:00 2001
+From: Keita Iwabuchi <iwabuchi1@lln.gov>
+Date: Sat, 13 Apr 2024 21:08:13 -0700
+Subject: [PATCH] Build bench program
+
+---
+ CMakeLists.txt | 14 +++++++++++---
+ 1 file changed, 11 insertions(+), 3 deletions(-)
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index be0d40f..6510770 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -32,10 +32,10 @@ else()
+     option(HNSWLIB_EXAMPLES "Build examples and tests." OFF)
+ endif()
+ if(HNSWLIB_EXAMPLES)
+-    set(CMAKE_CXX_STANDARD 11)
++    set(CMAKE_CXX_STANDARD 17)
+ 
+     if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+-      SET( CMAKE_CXX_FLAGS  "-Ofast -std=c++11 -DHAVE_CXX0X -openmp -fpic -ftree-vectorize" )
++      SET( CMAKE_CXX_FLAGS  "-Ofast -std=c++17 -DHAVE_CXX0X -openmp -fpic -ftree-vectorize" )
+       check_cxx_compiler_flag("-march=native" COMPILER_SUPPORT_NATIVE_FLAG)
+       if(COMPILER_SUPPORT_NATIVE_FLAG)
+         SET( CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=native" )
+@@ -48,7 +48,7 @@ if(HNSWLIB_EXAMPLES)
+         endif()
+       endif()
+     elseif (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+-      SET( CMAKE_CXX_FLAGS  "-Ofast -lrt -std=c++11 -DHAVE_CXX0X -march=native -fpic -w -fopenmp -ftree-vectorize -ftree-vectorizer-verbose=0" )
++      SET( CMAKE_CXX_FLAGS  "-Ofast -lrt -std=c++17 -DHAVE_CXX0X -march=native -fpic -w -fopenmp -ftree-vectorize -ftree-vectorizer-verbose=0" )
+     elseif (CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+       SET( CMAKE_CXX_FLAGS  "/O2 -DHAVE_CXX0X /W1 /openmp /EHsc" )
+     endif()
+@@ -102,4 +102,12 @@ if(HNSWLIB_EXAMPLES)
+ 
+     add_executable(main tests/cpp/main.cpp tests/cpp/sift_1b.cpp)
+     target_link_libraries(main hnswlib)
++
++    add_executable(run_hnswlib_bench_float ${PROJECT_SOURCE_DIR}/bench/run_hnswlib_bench.cpp)
++    target_link_libraries(run_hnswlib_bench_float hnswlib)
++    target_compile_definitions(run_hnswlib_bench_float PRIVATE HNSWLIB_FLOAT_POINT_TYPE)
++
++    add_executable(run_hnswlib_bench_u8i ${PROJECT_SOURCE_DIR}/bench/run_hnswlib_bench.cpp)
++    target_link_libraries(run_hnswlib_bench_u8i hnswlib)
++    target_compile_definitions(run_hnswlib_bench_u8i PRIVATE HNSWLIB_UINT8_POINT_TYPE)
+ endif()
+-- 
+2.39.3 (Apple Git-145)
+

@@ -29,8 +29,8 @@
 using namespace saltatlas::neo_dnnd;
 
 using id_type = uint32_t;
-#ifdef FEATURE_ELEMENT_TYPE
-using feature_elem_type = FEATURE_ELEMENT_TYPE;
+#ifdef SALTATLAS_NEO_DNND_FEATURE_ELEMENT_TYPE
+using feature_elem_type = SALTATLAS_NEO_DNND_FEATURE_ELEMENT_TYPE;
 #else
 using feature_elem_type = float;
 #endif
