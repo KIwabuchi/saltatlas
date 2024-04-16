@@ -238,6 +238,31 @@ mpirun -n 2 ./examples/dnnd_pm_query_example -z ./pindex \
   -n 4 -q ../examples/datasets/query_5-4.txt -g ../examples/datasets/ground-truth_5-4.txt
 ```
 
+
+## Running NEO-DNND Example
+
+### Build
+
+The build steps are the same as the DNND PM examples as described [here](#running-dnnd-pm-persistent-memory-examples).
+
+### Run
+
+NEO-DNND takes the same input file format as DNND PM examples.
+
+Run the following command to see the help menu.
+
+```shell
+cd build
+mpirun -n [#of procs] ./examples/neo_dnnd_example -h
+```
+
+
+## Dataset Converter
+
+We provide Python scripts to convert the ANN Benchmarks and Bing-ANN datasets to the white-space separated value (WSV) format files.
+The scripts are located in the [./tools directory](./tools).
+
+
 # License
 saltatlas is distributed under the MIT license.
 
