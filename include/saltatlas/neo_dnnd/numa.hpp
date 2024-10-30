@@ -5,17 +5,18 @@
 
 #pragma once
 
+#ifdef SALTATLAS_USE_NUMA
 #ifndef __APPLE__
 #include <numa.h>
-#define USE_NUMA_LIB
 #else
 #warning "Does not use NUMA"
+#endif
 #endif
 
 namespace saltatlas::neo_dnnd::numa {
 
 bool available() noexcept {
-#ifdef USE_NUMA_LIB
+#ifdef SALTATLAS_USE_NUMA
   return ::numa_available() != -1;
 #else
   return false;
@@ -23,7 +24,7 @@ bool available() noexcept {
 }
 
 int get_num_avail_nodes() noexcept {
-#ifdef USE_NUMA_LIB
+#ifdef SALTATLAS_USE_NUMA
   return ::numa_max_node() + 1;
 #else
   return 1;

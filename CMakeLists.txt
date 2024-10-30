@@ -62,12 +62,23 @@ endif()
 #  Option to use Metall
 option(SALTATLAS_USE_METALL "Use Metall" OFF)
 
+# NUMA
+option(SALTATLAS_USE_NUMA "Use NUMA" OFF)
+
 include(FetchContent)
 
 #
 #  OpenMP
 #
 find_package(OpenMP)
+
+
+#
+# NUMA
+#
+if (SALTATLAS_USE_NUMA)
+    find_library(NUMA_LIB numa REQUIRED)
+endif()
 
 #
 # Boost
@@ -241,6 +252,9 @@ target_include_directories(
 target_link_libraries(
     saltatlas INTERFACE ${SALTATLAS_CEREAL_TARGET} ygm::ygm hnswlib::hnswlib
 )
+if (NUMA_LIB)
+    target_link_libraries(saltatlas INTERFACE ${NUMA_LIB})
+endif ()
 option(SALTATLAS_DETERMINISM "Avoid shuffling for deterministic output" OFF)
 if (SALTATLAS_DETERMINISM)
     message(STATUS ${PROJECT_NAME} " setting determinism")
