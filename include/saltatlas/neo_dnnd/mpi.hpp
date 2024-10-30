@@ -415,43 +415,34 @@ class communicator {
   int        m_local_size;
 };
 
-/// \brief Execute a user-defined function for each unique pair of ranks.
+/// \brief Execute a user-defined function for each unique pair of ranks using
+/// the round-robin tournament algorithm.
 // The user-defined function is executed as 'size' times (including
 // self-directed communication). In every execution, each rank is exclusively
 // paired with one other rank. If rank ‘a' is paired with rank ‘b', rank ‘b' is
 // paired with only rank ‘a' during the same step. Thus, all ranks can execute
 // the function, utilizing the parallelism fully.
 /// \tparam function_t Function type.
-/// \param comm_size MPI size. Must be a power of 2.
+/// \param comm_size MPI size. Must be 1 or an even number.
 /// \param comm_rank My MPI rank.
 /// \param func Function to execute.
 template <typename function_t>
-inline constexpr void pair_wise_all_to_all(
-    const int comm_size, const int comm_rank, const function_t& func,
-    const MPI_Comm comm = MPI_COMM_WORLD) {
-  // make sure comm_size is a power of 2
-  if ((comm_size & (comm_size - 1)) != 0) {
-    if (comm_rank == 0) {
-      std::cerr << "MPI size must be a power of 2" << std::endl;
-      DNND2_CHECK_MPI(::MPI_Abort(comm, EXIT_FAILURE));
-    }
+inline void pair_wise_all_to_all(const int comm_size, const int comm_rank,
+                                 const function_t& func,
+                                 const MPI_Comm    comm = MPI_COMM_WORLD) {
+  // self-directed communication
+  func(comm_rank);
+  if (comm_size == 1) return;
+
+  if (comm_size % 2 != 0) {
+    std::cerr << "MPI size must be even" << std::endl;
+    DNND2_CHECK_MPI(::MPI_Abort(comm, EXIT_FAILURE));
   }
 
-  func(comm_rank);  // self-directed communication
-
-  for (int block_size = 1; block_size <= comm_size / 2; block_size *= 2) {
-    const bool left_block = (comm_rank / block_size) % 2 == 0;
-    for (int i = 0; i < block_size; ++i) {
-      const int pair_blocK_begin =
-          (left_block) ? saltatlas::neo_dnnd::utility::round_down(
-                             comm_rank + block_size, block_size)
-                       : saltatlas::neo_dnnd::utility::round_down(
-                             comm_rank - block_size, block_size);
-      const int in_block_pos = (left_block) ? (comm_rank + i) % block_size
-                                            : (comm_rank - i) % block_size;
-      const int pair_rank    = pair_blocK_begin + in_block_pos;
-      func(pair_rank);
-    }
+  std::vector<int> pairs(comm_size - 1, -1);
+  utility::gen_round_robin_tournament(comm_size, comm_rank, pairs.begin());
+  for (const auto pair_rank : pairs) {
+    func(pair_rank);
   }
 }
 

@@ -45,6 +45,7 @@ function(add_saltatlas_neo_dnnd_example_feature_type example_name type_name)
     add_executable(${example_exe} "${example_name}.cpp")
     target_link_libraries(${example_exe} PUBLIC saltatlas)
     target_link_libraries(${example_exe} PRIVATE Perroht::Perroht)
+    target_link_libraries(${example_exe} PRIVATE numa)
     target_compile_definitions(${example_exe}
             PRIVATE "SALTATLAS_NEO_DNND_FEATURE_ELEMENT_TYPE=${type_name}")
 endfunction()
