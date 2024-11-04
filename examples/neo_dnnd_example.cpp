@@ -81,7 +81,6 @@ struct options {
   bool        optimize       = false;
   double      pruning_factor = -1;
   std::size_t batch_size     = 1ULL << 25;
-  // #of fvs to cache per rank, 0 means no caching.
   double popular_fv_ratio              = 0.0f;
   bool   donot_remove_dup_fvs          = false;
   bool   donot_share_pstore_regionally = false;
