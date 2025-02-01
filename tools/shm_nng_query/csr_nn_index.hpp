@@ -5,12 +5,14 @@
 
 #pragma once
 
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <iterator>
 #include <memory>
 #include <scoped_allocator>
 #include <string>
+#include <vector>
 
 #include <metall/offset_ptr.hpp>
 #include <metall/utility/open_mp.hpp>
@@ -28,7 +30,7 @@ class csr_nn_index {
   using byte_allocator_type =
       typename std::allocator_traits<Alloc>::template rebind_alloc<std::byte>;
   using byte_allocator_traits = std::allocator_traits<byte_allocator_type>;
-  using byte_pointer          = typename byte_allocator_type::pointer;
+  using byte_pointer          = typename byte_allocator_traits::pointer;
 
  public:
   using id_type        = Id;
@@ -41,12 +43,13 @@ class csr_nn_index {
   using offset_allocator_type = typename std::allocator_traits<
       allocator_type>::template rebind_alloc<offset_type>;
 
-  using id_pointer     = typename id_allocator_type::pointer;
-  using offset_pointer = typename offset_allocator_type::pointer;
+  using id_pointer = typename std::allocator_traits<id_allocator_type>::pointer;
+  using offset_pointer =
+      typename std::allocator_traits<offset_allocator_type>::pointer;
 
  public:
-  csr_nn_index(const std::vector<std::string>& index_file_paths,
-               const allocator_type&           alloc = allocator_type{})
+  csr_nn_index(const std::vector<std::filesystem::path>& index_file_paths,
+               const allocator_type& alloc = allocator_type{})
       : m_allocator(alloc) {
     construct_nn_index(index_file_paths);
   }
@@ -119,7 +122,7 @@ class csr_nn_index {
 
   /// \warning This function assumes that the index file contains the point IDs
   /// in the first column and distances are not included.
-  void construct_nn_index(const std::vector<std::string>& index_file_paths) {
+  void construct_nn_index(const std::vector<std::filesystem::path>& index_file_paths) {
     std::cout << "Loading k-NN index from " << index_file_paths.size()
               << " files..." << std::endl;
 

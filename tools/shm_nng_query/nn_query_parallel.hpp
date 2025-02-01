@@ -8,46 +8,51 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <queue>
 #include <random>
+#include <string>
+#include <string_view>
+#include <vector>
 
 #include <boost/unordered/unordered_flat_set.hpp>
-#include <metall/utility/random.hpp>
 #include <metall/utility/open_mp.hpp>
+#include <metall/utility/random.hpp>
 
-#include <saltatlas/dnnd/detail/distance.hpp>
-#include <saltatlas/dnnd/detail/feature_vector.hpp>
-#include <saltatlas/dnnd/detail/neighbor.hpp>
+#include <saltatlas/common/detail/neighbor.hpp>
+#include <saltatlas/common/detail/utilities/float.hpp>
+#include <saltatlas/common/detail/utilities/general.hpp>
+#include <saltatlas/common/point_store.hpp>
 #include <saltatlas/dnnd/detail/nn_index.hpp>
-#include <saltatlas/dnnd/detail/point_store.hpp>
 #include <saltatlas/dnnd/detail/utilities/bitset.hpp>
-#include <saltatlas/dnnd/detail/utilities/float.hpp>
 #include <saltatlas/dnnd/detail/utilities/time.hpp>
+#include <saltatlas/dnnd/feature_vector.hpp>
+#include <saltatlas/neo_dnnd/distance.hpp>
 
 namespace saltatlas {
 
 namespace {
-  namespace omp = metall::utility::omp;
+namespace omp = metall::utility::omp;
 }
 
 template <typename PointStore, typename NNIndex, typename IdType,
           typename DistanceType, typename FeatureElementType>
 class knn_parallel_query_kernel {
  public:
-  using id_type = IdType;
-  using distance_type = DistanceType;
+  using id_type              = IdType;
+  using distance_type        = DistanceType;
   using feature_element_type = FeatureElementType;
-  using point_store_type = PointStore;
-  using nn_index_type = NNIndex;
+  using point_store_type     = PointStore;
+  using nn_index_type        = NNIndex;
 
-  using distance_metric =
-      dndetail::distance::metric_type<feature_element_type, distance_type>;
-  using neighbor_type = dndetail::neighbor<id_type, distance_type>;
+  using distance_function =
+      neo_dnnd::distance::similarity_type<feature_element_type, distance_type>;
+  using neighbor_type = detail::neighbor<id_type, distance_type>;
 
   struct option {
     std::size_t k{0};
-    double epsilon{0.0};
-    uint64_t rnd_seed{128};
-    bool verbose{false};
+    double      epsilon{0.0};
+    uint64_t    rnd_seed{128};
+    bool        verbose{false};
   };
 
  private:
@@ -74,16 +79,17 @@ class knn_parallel_query_kernel {
                           neighbor_greater>;
 
  public:
-  knn_parallel_query_kernel(const option& opt,
+  knn_parallel_query_kernel(const option&           opt,
                             const point_store_type& point_store,
-                            const std::string_view& distance_metric_name,
-                            const nn_index_type& nn_index,
-                            const int num_threads = -1)
+                            const std::string_view& distance_function_name,
+                            const nn_index_type&    nn_index,
+                            const int               num_threads = -1)
       : m_option(opt),
         m_point_store(point_store),
-        m_distance_metric(
-            dndetail::distance::metric<feature_element_type, distance_type>(
-                distance_metric_name)),
+        m_distance_function(
+            neo_dnnd::distance::similarity_function<feature_element_type,
+                                                    distance_type>(
+                distance_function_name)),
         m_nn_index(nn_index) {
     if (num_threads > 0) {
       omp::set_num_threads(num_threads);
@@ -100,10 +106,10 @@ class knn_parallel_query_kernel {
     std::vector<std::vector<neighbor_type>> results;
 
     OMP_DIRECTIVE(parallel) {
-      const auto tid = omp::get_thread_num();
+      const auto tid      = omp::get_thread_num();
       const auto nthreads = omp::get_num_threads();
       const auto range =
-          saltatlas::dndetail::partial_range(queries.size(), tid, nthreads);
+          saltatlas::detail::partial_range(queries.size(), tid, nthreads);
       metall::utility::rand_512 rnd_generator(m_option.rnd_seed);
 
       OMP_DIRECTIVE(single)
@@ -121,7 +127,7 @@ class knn_parallel_query_kernel {
   template <typename RndGenerator>
   std::vector<neighbor_type> query_single(
       const std::vector<feature_element_type>& query,
-      RndGenerator& rnd_generator) {
+      RndGenerator&                            rnd_generator) {
     asc_heap_type frontier;
     dsc_heap_type knn_heap;
 
@@ -135,13 +141,13 @@ class knn_parallel_query_kernel {
         while (true) {
           std::uniform_int_distribution<> dis(0,
                                               m_point_store.num_points() - 1);
-          const id_type id = dis(rnd_generator);
+          const id_type                   id = dis(rnd_generator);
           if (visited.count(id)) continue;
           visited.insert(id);
 
-          const auto d = m_distance_metric(query.data(), query.size(),
-                                           m_point_store.at(id),
-                                           m_point_store.num_dimensions());
+          const auto d         = m_distance_function(query.data(), query.size(),
+                                                     m_point_store.at(id),
+                                                     m_point_store.num_dimensions());
           const auto candidate = neighbor_type(id, d);
           frontier.push(candidate);
           knn_heap.push(candidate);
@@ -151,9 +157,9 @@ class knn_parallel_query_kernel {
     }
 
     const double distance_scale = 1.0 + m_option.epsilon;
-    double distance_bound = (knn_heap.size() >= m_option.k)
-                                ? knn_heap.top().distance * distance_scale
-                                : std::numeric_limits<double>::max();
+    double       distance_bound = (knn_heap.size() >= m_option.k)
+                                      ? knn_heap.top().distance * distance_scale
+                                      : std::numeric_limits<double>::max();
 
     // Main search loop
     {
@@ -172,9 +178,9 @@ class knn_parallel_query_kernel {
           if (visited.count(nid)) continue;
           visited.insert(nid);
 
-          const auto d = m_distance_metric(query.data(), query.size(),
-                                           m_point_store.at(nid),
-                                           m_point_store.num_dimensions());
+          const auto d = m_distance_function(query.data(), query.size(),
+                                             m_point_store.at(nid),
+                                             m_point_store.num_dimensions());
           if (d >= distance_bound) continue;
 
           const auto candidate = neighbor_type(nid, d);
@@ -207,10 +213,10 @@ class knn_parallel_query_kernel {
   }
 
  private:
-  const option m_option;
-  const point_store_type& m_point_store;
-  const distance_metric& m_distance_metric;
-  const nn_index_type& m_nn_index;
+  const option             m_option;
+  const point_store_type&  m_point_store;
+  const distance_function& m_distance_function;
+  const nn_index_type&     m_nn_index;
 };
 
 }  // namespace saltatlas

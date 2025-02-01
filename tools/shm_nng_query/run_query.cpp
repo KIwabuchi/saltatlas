@@ -8,12 +8,15 @@
 #include <algorithm>
 #include <chrono>
 #include <iostream>
-#include <saltatlas/dnnd/data_reader.hpp>
+#include <string>
+#include <vector>
+#include <filesystem>
+
+#include <saltatlas/common/data_reader.hpp>
+#include <saltatlas/common/detail/neighbor.hpp>
 #include <saltatlas/dnnd/detail/utilities/file.hpp>
 #include <saltatlas/dnnd/detail/utilities/time.hpp>
 #include <saltatlas/dnnd/utility.hpp>
-#include <string>
-#include <vector>
 
 #if USE_PARALLEL_QUERY
 #include "nn_query_parallel.hpp"
@@ -53,13 +56,13 @@ using nn_query_kernel =
 
 struct option {
   nn_query_kernel::option query_option;
-  std::string             point_files_dir;
+  std::filesystem::path   point_files_dir;
   std::string             point_file_format;
-  std::string             index_files_dir;
+  std::filesystem::path   index_files_dir;
   std::string             distance_metric;
-  std::string             query_file_path;
-  std::string             ground_truth_file_path;
-  std::string             query_result_file_path;
+  std::filesystem::path   query_file_path;
+  std::filesystem::path   ground_truth_file_path;
+  std::filesystem::path   query_result_file_path;
 
   /// Show the option values
   void show() const {

@@ -5,13 +5,14 @@
 
 #pragma once
 
+#include <algorithm>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
-#include <sstream>
-#include <vector>
-#include <string>
 #include <memory>
-#include <algorithm>
+#include <sstream>
+#include <string>
+#include <vector>
 
 #include <metall/container/vector.hpp>
 #include <metall/utility/open_mp.hpp>
@@ -34,12 +35,12 @@ class packed_point_store {
   using pointer_type = typename std::allocator_traits<Alloc>::pointer;
 
  public:
-  using id_type = Id;
-  using value_type = T;
+  using id_type        = Id;
+  using value_type     = T;
   using allocator_type = Alloc;
 
-  packed_point_store(const std::vector<std::string>& point_file_paths,
-                     const std::string_view format,
+  packed_point_store(const std::vector<std::filesystem::path>& point_file_paths,
+                     const std::string_view                    format,
                      const allocator_type& alloc = allocator_type{})
       : m_allocator(alloc) {
     load_point(point_file_paths, format);
@@ -49,16 +50,16 @@ class packed_point_store {
     if (m_data) {
       std::allocator_traits<allocator_type>::deallocate(m_allocator, m_data,
                                                         m_k * m_num_points);
-      m_data = nullptr;
+      m_data       = nullptr;
       m_num_points = 0;
-      m_k = 0;
+      m_k          = 0;
     }
   }
 
-  packed_point_store(const packed_point_store&) = delete;
+  packed_point_store(const packed_point_store&)            = delete;
   packed_point_store& operator=(const packed_point_store&) = delete;
 
-  packed_point_store(packed_point_store&&) = default;
+  packed_point_store(packed_point_store&&)            = default;
   packed_point_store& operator=(packed_point_store&&) = default;
 
   T* at(const std::size_t pid) {
@@ -85,11 +86,11 @@ class packed_point_store {
                                                              total_elements);
     assert(m_data);
     m_num_points = num_points;
-    m_k = k;
+    m_k          = k;
   }
 
-  void load_point(const std::vector<std::string>& point_file_paths,
-                  const std::string_view format) {
+  void load_point(const std::vector<std::filesystem::path>& point_file_paths,
+                  const std::string_view          format) {
     if (!((format == "wsv-id") ||
           (format == "wsv" && point_file_paths.size() == 1))) {
       std::cerr << "Unsupported format: " << format << std::endl;
@@ -100,13 +101,13 @@ class packed_point_store {
               << std::endl;
 
     std::cout << "Counting #of points..." << std::endl;
-    std::size_t k = 0;  // must init with 0 here
+    std::size_t              k = 0;  // must init with 0 here
     std::vector<std::size_t> num_points(point_file_paths.size(), 0);
 #ifdef _OPENMP
 #pragma omp parallel for
 #endif
     for (std::size_t i = 0; i < point_file_paths.size(); ++i) {
-      const auto& point_file_path = point_file_paths[i];
+      const auto&   point_file_path = point_file_paths[i];
       std::ifstream ifs(point_file_path);
       if (!ifs) {
         std::cerr << "Cannot open " << point_file_path << std::endl;
@@ -149,7 +150,7 @@ class packed_point_store {
 #pragma omp parallel for
 #endif
     for (std::size_t i = 0; i < point_file_paths.size(); ++i) {
-      const auto& point_file_path = point_file_paths[i];
+      const auto&   point_file_path = point_file_paths[i];
       std::ifstream ifs(point_file_path);
       if (!ifs) {
         std::cerr << "Cannot open " << point_file_path << std::endl;
@@ -188,9 +189,9 @@ class packed_point_store {
   }
 
   allocator_type m_allocator;
-  std::size_t m_k{0};
-  std::size_t m_num_points{0};
-  pointer_type m_data{nullptr};
+  std::size_t    m_k{0};
+  std::size_t    m_num_points{0};
+  pointer_type   m_data{nullptr};
 };
 
 }  // namespace saltatlas
