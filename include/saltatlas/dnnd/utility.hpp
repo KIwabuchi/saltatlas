@@ -14,8 +14,8 @@
 
 #include <ygm/comm.hpp>
 
-#include <saltatlas/dnnd/detail/neighbor.hpp>
-#include <saltatlas/dnnd/detail/utilities/float.hpp>
+#include <saltatlas/common/detail/neighbor.hpp>
+#include <saltatlas/common/detail/utilities/float.hpp>
 #include <saltatlas/dnnd/detail/utilities/file.hpp>
 
 namespace saltatlas::utility {
@@ -23,7 +23,7 @@ namespace saltatlas::utility {
 using saltatlas::dndetail::find_file_paths;
 
 namespace {
-using saltatlas::dndetail::neighbor;
+using saltatlas::detail::neighbor;
 
 template <typename id_t, typename dist_t>
 using neighbors_tbl = std::vector<std::vector<neighbor<id_t, dist_t>>>;
@@ -124,8 +124,8 @@ inline std::vector<double> get_recall_scores_with_only_distance(
     std::size_t num_corrects = 0;
     for (std::size_t n = 0; n < k; ++n) {
       num_corrects += (sorted_test[n].distance < max_distance ||
-                       dndetail::nearly_equal(sorted_test[n].distance,
-                                              max_distance, epsilon));
+                       detail::nearly_equal(sorted_test[n].distance,
+                                            max_distance, epsilon));
     }
 
     scores.push_back((double)num_corrects / (double)k * 100.0);
@@ -177,7 +177,7 @@ inline std::vector<double> get_recall_scores_with_distance_ties(
     const auto               max_distance = sorted_gt[k - 1].distance;
     for (std::size_t n = 0; n < sorted_gt.size(); ++n) {
       if (n >= k &&
-          !dndetail::nearly_equal(sorted_gt[n].distance, max_distance, epsilon))
+          !detail::nearly_equal(sorted_gt[n].distance, max_distance, epsilon))
         break;
       true_id_set.insert(sorted_gt[n].id);
     }
@@ -228,15 +228,20 @@ inline void gather_neighbors(const neighbors_tbl<id_t, dist_t> &local_results,
   }
 }
 
-/// \brief Dumps neighbors to a file
+/// \brief Dumps neighbors to a file.
+/// There are two blocks in the dumped file.
+/// Assume that there are n neighbors for each query.
+/// the first n-lines are IDs of neighbors, and the next n-lines are distances.
+/// 0-th line is for the neighbor IDs of the first entry in the table.
+/// n-th line is for the neighbor distances of the 0-th entry in the table.
 /// \tparam id_t ID type.
 /// \tparam dist_t Distance type.
 /// \param table Neighbors to dump.
 /// \param dump_file_path Out file path.
 template <typename id_t, typename dist_t>
 inline void dump_neighbors(const neighbors_tbl<id_t, dist_t> &table,
-                           const std::string_view            &dump_file_path) {
-  std::ofstream ofs(dump_file_path.data());
+                           const std::filesystem::path       &dump_file_path) {
+  std::ofstream ofs(dump_file_path);
   if (!ofs.is_open()) {
     std::cerr << "Failed to create search table file(s)" << std::endl;
     return;
@@ -258,10 +263,12 @@ inline void dump_neighbors(const neighbors_tbl<id_t, dist_t> &table,
   }
 }
 
+/// \brief Gather and dump neighbors to a file in the root rank.
 template <typename id_t, typename dist_t>
-inline void gather_and_dump_neighbors(const neighbors_tbl<id_t, dist_t> &table,
-                                      const std::string_view &dump_file_path,
-                                      ygm::comm &comm, const int root = 0) {
+inline void gather_and_dump_neighbors(
+    const neighbors_tbl<id_t, dist_t> &table,
+    const std::filesystem::path &dump_file_path, ygm::comm &comm,
+    const int root = 0) {
   neighbors_tbl<id_t, dist_t> root_table;
   saltatlas::utility::gather_neighbors(table, root_table, comm);
 

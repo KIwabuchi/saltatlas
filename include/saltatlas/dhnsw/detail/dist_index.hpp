@@ -34,7 +34,7 @@ struct hnsw_params_t {
 };
 
 template <typename DistType, typename IndexType, typename Point,
-          template <typename, typename, typename> class Partitioner>
+          typename Partitioner>
 class dhnsw_impl {
   friend class query_engine<DistType, IndexType, Point>;
 
@@ -45,16 +45,16 @@ class dhnsw_impl {
   using feature_vec_type         = Point;
   using index_vec_type           = std::vector<index_type>;
   using data_index_cell_map_type = std::map<index_type, index_vec_type>;
-  using partitioner_type = Partitioner<dist_type, index_type, point_type>;
+  using partitioner_type         = Partitioner;
 
   dhnsw_impl(int max_voronoi_rank, int num_cells,
-             hnswlib::SpaceInterface<dist_type> *space_ptr, ygm::comm *c,
+             hnswlib::SpaceInterface<dist_type> &space_wrapper, ygm::comm &c,
              partitioner_type &p)
       : m_max_voronoi_rank(max_voronoi_rank),
         m_num_cells(num_cells),
-        m_metric_space_ptr(space_ptr),
-        m_comm_size(m_comm->size()),
-        m_comm_rank(m_comm->rank()),
+        m_space_wrapper(space_wrapper),
+        m_comm_size(m_comm.size()),
+        m_comm_rank(m_comm.rank()),
         m_comm(c),
         m_partitioner(p),
         pthis(this) {
@@ -65,7 +65,7 @@ class dhnsw_impl {
   }
 
   ~dhnsw_impl() {
-    m_comm->barrier();
+    m_comm.barrier();
     for (int i = 0; i < m_voronoi_cell_hnsw.size(); ++i) {
       delete m_voronoi_cell_hnsw[i];
     }
@@ -86,7 +86,7 @@ class dhnsw_impl {
     if (not m_constructed_index) {
       m_hnsw_params = p;
     } else {
-      m_comm->cerr(
+      m_comm.cerr(
           "Setting HNSW parameters after HNSW construction has no effect");
     }
   }
@@ -95,7 +95,7 @@ class dhnsw_impl {
                                          const point_type &v) {
     index_vec_type point_partitions =
         partitioner().find_point_partitions(v, m_max_voronoi_rank);
-    ASSERT_RELEASE(point_partitions[0] < m_num_cells);
+    YGM_ASSERT_RELEASE(point_partitions[0] < m_num_cells);
     add_data_point_to_insertion_queue(index, v, point_partitions);
   }
 
@@ -103,8 +103,8 @@ class dhnsw_impl {
                                          const point_type     &v,
                                          const index_vec_type &closest_seeds) {
     auto insertion_cell = closest_seeds[0];
-    ASSERT_RELEASE(insertion_cell < m_num_cells);
-    m_comm->async(
+    YGM_ASSERT_RELEASE(insertion_cell < m_num_cells);
+    m_comm.async(
         cell_owner(insertion_cell),
         [](auto mbox, ygm::ygm_ptr<dhnsw_impl> pthis, index_type index,
            const index_type insertion_cell, const index_vec_type &closest_seeds,
@@ -118,15 +118,15 @@ class dhnsw_impl {
   }
 
   void initialize_hnsw() {
-    ASSERT_RELEASE(m_constructed_index == false);
+    YGM_ASSERT_RELEASE(m_constructed_index == false);
 
     // Initialize HNSW structures
     for (int i = 0; i < num_local_cells(); ++i) {
-      ASSERT_RELEASE(m_cell_add_vec[i].size() > 0);
+      YGM_ASSERT_RELEASE(m_cell_add_vec[i].size() > 0);
 
       hnswlib::HierarchicalNSW<dist_type> *hnsw =
           new hnswlib::HierarchicalNSW<dist_type>(
-              m_metric_space_ptr, m_cell_add_vec[i].size(), m_hnsw_params.M,
+              &m_space_wrapper, m_cell_add_vec[i].size(), m_hnsw_params.M,
               m_hnsw_params.ef_construction,
               m_hnsw_params.random_seed);  // 16, 200, 1);
       m_voronoi_cell_hnsw.push_back(hnsw);
@@ -161,7 +161,7 @@ class dhnsw_impl {
            (m_comm_rank < m_num_cells % m_comm_size);
   }
 
-  inline ygm::comm &comm() { return *m_comm; }
+  inline ygm::comm &comm() { return m_comm; }
 
   partitioner_type &partitioner() { return m_partitioner; }
 
@@ -187,7 +187,7 @@ class dhnsw_impl {
   }
 
   const point_type &get_point(index_type index) {
-    ASSERT_RELEASE(m_local_data.count(index) > 0);
+    YGM_ASSERT_RELEASE(m_local_data.count(index) > 0);
     return m_local_data[index];
   }
 
@@ -228,12 +228,12 @@ class dhnsw_impl {
   std::map<index_type, point_type> m_local_data;
 
   std::vector<hnswlib::HierarchicalNSW<dist_type> *> m_voronoi_cell_hnsw;
-  hnswlib::SpaceInterface<dist_type>                *m_metric_space_ptr;
+  hnswlib::SpaceInterface<dist_type>                &m_space_wrapper;
 
   std::vector<std::vector<std::pair<index_type, point_type>>>
       m_cell_add_vec;  // per-cell vector of indices to add to HNSW structure
 
-  ygm::comm               *m_comm;
+  ygm::comm               &m_comm;
   ygm::ygm_ptr<dhnsw_impl> pthis;
   int                      m_comm_size;
   int                      m_comm_rank;

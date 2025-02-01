@@ -48,29 +48,31 @@
 #include <ygm/comm.hpp>
 #include <ygm/utility.hpp>
 
+#include <saltatlas/common/detail/neighbor.hpp>
+#include <saltatlas/common/detail/utilities/mpi.hpp>
+#include <saltatlas/common/detail/utilities/ygm.hpp>
 #include <saltatlas/dnnd/detail/distance.hpp>
-#include <saltatlas/dnnd/detail/neighbor.hpp>
-#include <saltatlas/dnnd/detail/neighbor_cereal.hpp>
+#include <saltatlas/dnnd/detail/knn_heap.hpp>
+#include <saltatlas/common/detail/neighbor_cereal.hpp>
 #include <saltatlas/dnnd/detail/nn_index.hpp>
-#include <saltatlas/dnnd/detail/point_store.hpp>
-#include <saltatlas/dnnd/detail/utilities/mpi.hpp>
-#include <saltatlas/dnnd/detail/utilities/ygm.hpp>
+#include "saltatlas/common/point_store.hpp"
 
 namespace saltatlas::dndetail {
 
 template <typename PointStore, typename Distance>
 class dnnd_kernel {
  public:
-  using id_type              = typename PointStore::id_type;
-  using distance_type        = Distance;
-  using feature_element_type = typename PointStore::feature_element_type;
+  using id_type       = typename PointStore::id_type;
+  using distance_type = Distance;
+  using point_type    = typename PointStore::point_type;
   // Redefine point store type so that autocompletion works when writing code.
-  using point_store_type   = point_store<id_type, feature_element_type,
-                                       typename PointStore::allocator_type>;
-  using featur_vector_type = typename point_store_type::feature_vector_type;
-  using point_partitioner  = std::function<int(const id_type& id)>;
-  using distance_metric =
-      distance::metric_type<feature_element_type, distance_type>;
+  using point_store_type =
+      point_store<id_type, point_type, typename PointStore::hasher,
+                  typename PointStore::equal_to,
+                  typename PointStore::allocator_type>;
+  using point_partitioner = std::function<int(const id_type& id)>;
+  using distance_function_type =
+      saltatlas::distance::distance_function_type<point_type, distance_type>;
 
   struct option {
     int         k{4};
@@ -84,16 +86,15 @@ class dnnd_kernel {
 
  public:
   dnnd_kernel(const option& opt, const point_store_type& point_store,
-              const point_partitioner& partitioner,
-              const distance_metric& metric, ygm::comm& comm)
+              const point_partitioner&      partitioner,
+              const distance_function_type& distance_function, ygm::comm& comm)
       : m_option(opt),
         m_point_store(point_store),
         m_point_partitioner(partitioner),
-        m_distance_function(metric),
+        m_distance_function(distance_function),
         m_comm(comm),
         m_rnd_generator(m_option.rnd_seed + m_comm.rank()) {
-    m_global_max_id = m_comm.all_reduce_max(m_point_store.max_id());
-    m_comm.cf_barrier();
+    priv_find_max_id();
     m_this.check(m_comm);
   }
 
@@ -148,6 +149,16 @@ class dnnd_kernel {
     priv_convert(knn_index);
   }
 
+  template <typename index_alloc_type>
+  void update(nn_index<id_type, distance_type, index_alloc_type>& knn_index) {
+    if (m_option.verbose) {
+      m_comm.cout0() << "Rerunning NN-Descent kernel" << std::endl;
+    }
+    priv_init_knn_heap_with_index(knn_index, true);
+    priv_construct_kernel();
+    priv_convert(knn_index);
+  }
+
   ygm::comm& comm() { return m_comm; }
 
  private:
@@ -160,12 +171,11 @@ class dnnd_kernel {
       boost::unordered_node_map<id_type,
                                 unique_knn_heap<id_type, distance_type, bool>>;
 #else
-  using knn_heap_table_type =
-      std::unordered_map<id_type,
-                         unique_knn_heap<id_type, distance_type, bool>>;
+  using knn_heap_table_type = std::unordered_map<
+      id_type, dndetail::unique_knn_heap<id_type, distance_type, bool>>;
 #endif
 
-  using neighbor_type = neighbor<id_type, distance_type>;
+  using neighbor_type = detail::neighbor<id_type, distance_type>;
 #if SALTATLAS_DNND_USE_BOOST_OPEN_ADDRESS_CONTAINER
   using adj_lsit_type =
       boost::unordered_node_map<id_type, std::vector<id_type>>;
@@ -174,6 +184,14 @@ class dnnd_kernel {
 #endif
 
   static constexpr std::size_t k_neighbor_check_local_batch_size_factor = 4;
+
+  void priv_find_max_id() {
+    m_global_max_id = 0;
+    for (const auto& [id, _] : m_point_store) {
+      m_global_max_id = std::max(m_global_max_id, id);
+    }
+    m_global_max_id = m_comm.all_reduce_max(m_global_max_id);
+  }
 
   void priv_init_knn_heap_with_random_values() {
     if (m_option.verbose) {
@@ -193,7 +211,7 @@ class dnnd_kernel {
           << std::endl;
     }
     priv_allocate_knn_heap();
-    priv_init_knn_heap_with_initial_index(init_knn_index, recheck);
+    priv_fill_knn_heap_with_initial_index(init_knn_index, recheck);
     // Fill the remaining uninitialized space with random values
     priv_fill_knn_heap_with_random_value();
   }
@@ -280,14 +298,12 @@ class dnnd_kernel {
     // dataset. The global batch size is equal to the mini-batch size divided by
     // init_k as each point sends up to init_k messages for initialization.
     auto pitr = m_point_store.begin();
-    run_batched_ygm_async(
+    detail::run_batched_ygm_async(
         m_point_store.size(),               // #of tasks in local
         m_option.mini_batch_size / init_k,  // global batch size
         m_option.verbose, m_comm, [this, &pitr, init_k](auto& comm) {
-          const auto                              sid     = pitr->first;
-          const auto&                             feature = pitr->second;
-          const std::vector<feature_element_type> source_feature(
-              feature.begin(), feature.end());
+          const auto  sid          = pitr->first;
+          const auto& source_point = pitr->second;
 
           std::unordered_set<id_type> neighbors;
           // Get the neighbors already in the heap
@@ -316,7 +332,7 @@ class dnnd_kernel {
             // Visit 'nid' and come back to 'sid' with the distance between
             // them.
             m_comm.async(m_point_partitioner(nid), distance_calculator{},
-                         m_this, sid, nid, source_feature);
+                         m_this, sid, nid, source_point);
           }
 
           ++pitr;
@@ -334,7 +350,7 @@ class dnnd_kernel {
 
   /// \brief Fills k-NN heap with a given index.
   template <typename alloc>
-  void priv_init_knn_heap_with_initial_index(
+  void priv_fill_knn_heap_with_initial_index(
       const nn_index<id_type, distance_type, alloc>& init_knn_index,
       const bool                                     recheck) {
     for (auto pitr = init_knn_index.points_begin();
@@ -342,12 +358,10 @@ class dnnd_kernel {
       const auto& sid = pitr->first;
       for (auto nitr = init_knn_index.neighbors_begin(sid);
            nitr != init_knn_index.neighbors_end(sid); ++nitr) {
-        const auto& nid     = nitr->id;
-        const auto& feature = m_point_store.feature_vector(sid);
-        const std::vector<feature_element_type> tmp_feature(feature.begin(),
-                                                            feature.end());
+        const auto& nid   = nitr->id;
+        const auto& point = m_point_store[sid];
         m_comm.async(m_point_partitioner(nid), distance_calculator{}, m_this,
-                     sid, nid, tmp_feature);
+                     sid, nid, point);
       }
     }
     if (!recheck) {
@@ -357,7 +371,7 @@ class dnnd_kernel {
   }
 
   /// \brief Fills k-NN heap with a given index.
-  void priv_init_knn_heap_with_initial_index(
+  void priv_fill_knn_heap_with_initial_index(
       const std::unordered_map<id_type, std::vector<id_type>>& init_knn_index,
       const bool                                               recheck) {
     for (auto pitr = init_knn_index.begin(); pitr != init_knn_index.end();
@@ -365,12 +379,10 @@ class dnnd_kernel {
       const auto& sid = pitr->first;
       for (auto nitr = pitr->second.begin(); nitr != pitr->second.end();
            ++nitr) {
-        const auto& nid     = *nitr;
-        const auto& feature = m_point_store.feature_vector(sid);
-        const std::vector<feature_element_type> tmp_feature(feature.begin(),
-                                                            feature.end());
+        const auto& nid   = *nitr;
+        const auto& point = m_point_store[sid];
         m_comm.async(m_point_partitioner(nid), distance_calculator{}, m_this,
-                     sid, nid, tmp_feature);
+                     sid, nid, point);
       }
     }
     if (!recheck) {
@@ -413,12 +425,9 @@ class dnnd_kernel {
     // Then, send back the calculated distance value to sid.
     void operator()(const ygm::ygm_ptr<self_type>& local_this,
                     const id_type sid, const id_type nid,
-                    const std::vector<feature_element_type>& src_feature_vec) {
-      const auto& nbr_feature_vec =
-          local_this->m_point_store.feature_vector(nid);
-      const auto d = local_this->m_distance_function(
-          src_feature_vec.data(), src_feature_vec.size(),
-          nbr_feature_vec.data(), nbr_feature_vec.size());
+                    const point_type& src_point) {
+      const auto& nbr_point = local_this->m_point_store[nid];
+      const auto  d = local_this->m_distance_function(src_point, nbr_point);
       local_this->comm().async(local_this->m_point_partitioner(sid),
                                distance_calculator{}, local_this, sid, nid, d);
     }
@@ -562,7 +571,7 @@ class dnnd_kernel {
       m_comm.cf_barrier();
 
       auto itr = reverse_neighbors.begin();
-      run_batched_ygm_async(
+      detail::run_batched_ygm_async(
           reverse_neighbors.size(), m_option.mini_batch_size, false, m_comm,
           [&itr, this](auto& comm) {
             const auto& source        = itr->first;
@@ -580,13 +589,12 @@ class dnnd_kernel {
     }
 
     // Init the receive buffer.
-    adj_lsit_type         recv_buf;
-    static adj_lsit_type& ref_recv_buf = recv_buf;
+    adj_lsit_type recv_buf;
     {
-      ref_recv_buf.clear();
-      ref_recv_buf.reserve(count_incoming.size());
+      recv_buf.clear();
+      recv_buf.reserve(count_incoming.size());
       for (auto& item : count_incoming) {
-        ref_recv_buf[item.first].reserve(item.second);
+        recv_buf[item.first].reserve(item.second);
       }
       count_incoming.clear();
       count_incoming.rehash(0);
@@ -595,25 +603,26 @@ class dnnd_kernel {
 
     // Send reverse neighbors to the corresponding sources.
     {
-      auto sitr            = source_ids.begin();
-      auto neighbor_sender = [&sitr, &reverse_neighbors,
+      auto                        sitr = source_ids.begin();
+      ygm::ygm_ptr<adj_lsit_type> ptr_recv_buf(&recv_buf);
+      auto neighbor_sender = [&sitr, &reverse_neighbors, &ptr_recv_buf,
                               this](ygm::comm& comm) {
         const auto& src = *sitr;
         const auto& rn  = reverse_neighbors.at(src);
         for (const auto& n : rn) {
           comm.async(
               m_point_partitioner(src),
-              [](const id_type vid, const auto& neighbor) {
-                ref_recv_buf[vid].push_back(neighbor);
+              [](const id_type vid, const auto& neighbor, auto ptr_recv_buf) {
+                (*ptr_recv_buf)[vid].push_back(neighbor);
               },
-              src, n);
+              src, n, ptr_recv_buf);
         }
         ++sitr;
         return 1;
       };
 
-      run_batched_ygm_async(source_ids.size(), m_option.mini_batch_size, false,
-                            m_comm, neighbor_sender);
+      detail::run_batched_ygm_async(source_ids.size(), m_option.mini_batch_size,
+                                    false, m_comm, neighbor_sender);
       assert(sitr == source_ids.end());
     }
 
@@ -734,7 +743,7 @@ class dnnd_kernel {
 
   struct neighbor_updater {
     // Called first.
-    // sends u1's feature vector to u2.
+    // sends u1's point data to u2.
     void operator()(const ygm::ygm_ptr<self_type>& local_this, const id_type u1,
                     const id_type u2) {
       const auto heap = local_this->m_knn_heap_table.at(u1);
@@ -749,11 +758,9 @@ class dnnd_kernel {
 #if SALTATLAS_DNND_SHOW_BASIC_MSG_STATISTICS
       ++local_this->m_num_feature_msgs;
 #endif
-      std::vector<feature_element_type> f(
-          local_this->m_point_store.feature_vector(u1).begin(),
-          local_this->m_point_store.feature_vector(u1).end());
       local_this->comm().async(local_this->m_point_partitioner(u2),
-                               neighbor_updater{}, local_this, u1, u2, f
+                               neighbor_updater{}, local_this, u1, u2,
+                               local_this->m_point_store[u1]
 #if SALTATLAS_DNND_PRUNE_LONG_DISTANCE_MSGS
                                ,
                                max_distance
@@ -764,9 +771,8 @@ class dnnd_kernel {
     // 2nd call.
     // Update u2's knn heap and sends the computed distance to u1, if needed.
     void operator()(const ygm::ygm_ptr<self_type>& local_this, const id_type u1,
-                    const id_type                            u2,
-                    const std::vector<feature_element_type>& u1_feature,
-                    const distance_type&                     u1_max_distance =
+                    const id_type u2, const point_type& u1_point,
+                    const distance_type& u1_max_distance =
                         std::numeric_limits<distance_type>::max()) {
 #if SALTATLAS_DNND_PROFILE_FEATURE_MSG
       if (local_this->m_feature_msg_src_count.count(u1) == 0) {
@@ -783,10 +789,8 @@ class dnnd_kernel {
 
       // Update u2's heap (nearest neighbors list) if 'u1' is closer than the
       // current neighbors.
-      const auto& u2_feature = local_this->m_point_store.feature_vector(u2);
-      const auto  d =
-          local_this->m_distance_function(u1_feature.data(), u1_feature.size(),
-                                          u2_feature.data(), u2_feature.size());
+      const auto& u2_point = local_this->m_point_store[u2];
+      const auto  d = local_this->m_distance_function(u1_point, u2_point);
       local_this->m_cnt_new_neighbors += nn_heap.push_unique(u1, d, true);
 
       if (d < u1_max_distance) {
@@ -818,9 +822,9 @@ class dnnd_kernel {
     }
     ygm::timer mini_batch_timer;
 
-    const auto local_mini_batch_size =
-        mpi::assign_tasks(targets.size(), m_option.mini_batch_size,
-                          m_comm.rank(), m_comm.size(), m_option.verbose);
+    const auto local_mini_batch_size = detail::mpi::assign_tasks(
+        targets.size(), m_option.mini_batch_size, m_comm.rank(), m_comm.size(),
+        m_option.verbose);
     assert(local_mini_batch_size <= targets.size());
 
 #if SALTATLAS_DNND_SHOW_MSG_DST_STATISTICS
@@ -889,8 +893,8 @@ class dnnd_kernel {
       const auto mean = (double)sum / (double)root_table.size();
       std::cout << "#of total messages " << sum << " with " << root_table.size()
                 << " workers" << std::endl;
-      std::cout << "Max, Mean, Min:\t"
-                << "" << *std::max_element(root_table.begin(), root_table.end())
+      std::cout << "Max, Mean, Min:\t" << ""
+                << *std::max_element(root_table.begin(), root_table.end())
                 << ", " << mean << ", "
                 << *std::min_element(root_table.begin(), root_table.end())
                 << std::endl;
@@ -950,17 +954,17 @@ class dnnd_kernel {
   }
 #endif
 
-  option                  m_option;
-  const point_store_type& m_point_store;
-  const point_partitioner m_point_partitioner;
-  const distance_metric&  m_distance_function;
-  ygm::comm&              m_comm;
-  std::mt19937            m_rnd_generator;
-  ygm::ygm_ptr<self_type> m_this{this};
-  knn_heap_table_type     m_knn_heap_table{};
-  id_type                 m_global_max_id{0};
-  std::size_t             m_mini_batch_no{0};
-  std::size_t             m_cnt_new_neighbors{0};
+  option                        m_option;
+  const point_store_type&       m_point_store;
+  const point_partitioner       m_point_partitioner;
+  const distance_function_type& m_distance_function;
+  ygm::comm&                    m_comm;
+  std::mt19937                  m_rnd_generator;
+  ygm::ygm_ptr<self_type>       m_this{this};
+  knn_heap_table_type           m_knn_heap_table{};
+  id_type                       m_global_max_id{0};
+  std::size_t                   m_mini_batch_no{0};
+  std::size_t                   m_cnt_new_neighbors{0};
 #if SALTATLAS_DNND_SHOW_BASIC_MSG_STATISTICS
   std::size_t m_num_neighbor_suggestion_msgs{0};
   std::size_t m_num_feature_msgs{0};
