@@ -17,7 +17,7 @@
 #include <metall/container/vector.hpp>
 #include <metall/utility/open_mp.hpp>
 
-#include <saltatlas/dnnd/detail/utilities/string_cast.hpp>
+#include <saltatlas/common/detail/utilities/string_cast.hpp>
 
 namespace saltatlas {
 
@@ -118,7 +118,7 @@ class packed_point_store {
       while (std::getline(ifs, buf)) {
         if (i == 0 && k == 0) {  // assume k is initialized with 0
           // count #of dimensions
-          k += saltatlas::dndetail::str_split<value_type>(buf).size();
+          k += saltatlas::detail::str_split<value_type>(buf).size();
           if (format == "wsv-id") {
             --k;  // The first column is ID
           }
@@ -171,7 +171,7 @@ class packed_point_store {
           }
         }
 
-        auto points = saltatlas::dndetail::str_split<value_type>(line_buf);
+        auto points = saltatlas::detail::str_split<value_type>(line_buf);
         if (format == "wsv-id") {
           points.erase(points.begin());
         }

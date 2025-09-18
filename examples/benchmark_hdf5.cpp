@@ -11,7 +11,7 @@
 #include <ygm/comm.hpp>
 #include <ygm/container/bag.hpp>
 #include <ygm/container/map.hpp>
-#include <ygm/utility.hpp>
+#include <ygm/utility/timer.hpp>
 
 #include <saltatlas/dhnsw/detail/utility.hpp>
 #include <saltatlas/dhnsw/dhnsw.hpp>
@@ -216,7 +216,7 @@ void build_index(
               << "\nNumber of Voronoi cells: " << num_seeds << std::endl;
   }
 
-  ygm::timer step_timer{};
+  ygm::utility::timer step_timer{};
 
   dist_index.comm().cout0("Reading data to temporary bag");
   auto bag_data = read_data<IndexType, Point>(bag_filenames, data_col_names);
@@ -355,7 +355,7 @@ void benchmark_query_trial_ground_truth(
   // Find approximate nearest neighbors, then check against ground truth values
   // stored in distributed map
   auto query_nearest_neighbors_lambda =
-      [](const point_type                        &query_pt,
+      [](const point_type                           &query_pt,
          const std::multimap<dist_type, index_type> &nearest_neighbors,
          uint64_t data_index, auto ground_truth_ptr) {
         // Lambda to check ANN against ground truth
@@ -454,7 +454,7 @@ void fill_filenames_bag(ygm::container::bag<std::string> &bag,
 int main(int argc, char **argv) {
   ygm::comm world(&argc, &argv);
   {
-    ygm::timer step_timer{};
+    ygm::utility::timer step_timer{};
 
     int mpi_rank = world.rank();
     int mpi_size = world.size();

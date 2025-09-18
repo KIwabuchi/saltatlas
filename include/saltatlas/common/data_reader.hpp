@@ -15,6 +15,7 @@
 #include <vector>
 
 #include <ygm/comm.hpp>
+#include <ygm/utility/boost_vector.hpp>
 
 #include <saltatlas/common/detail/neighbor.hpp>
 #include <saltatlas/common/detail/utilities/general.hpp>

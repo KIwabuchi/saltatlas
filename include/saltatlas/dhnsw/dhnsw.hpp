@@ -125,7 +125,7 @@ class dhnsw {
 
     m_comm.cout0("Repartitioning data");
     m_comm.barrier();
-    ygm::timer t;
+    ygm::utility::timer t;
     repartition_data();
     m_comm.barrier();
     m_comm.cout0("Partitioning time: ", t.elapsed());

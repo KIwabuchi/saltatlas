@@ -12,7 +12,7 @@
 #include <metall/container/string.hpp>
 #include <metall/metall.hpp>
 #include <ygm/comm.hpp>
-#include <ygm/utility.hpp>
+#include <ygm/utility/timer.hpp>
 
 #include <saltatlas/dnnd/data_reader.hpp>
 #include <saltatlas/dnnd/dhnsw_index_reader.hpp>

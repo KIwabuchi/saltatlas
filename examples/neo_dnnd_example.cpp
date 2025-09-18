@@ -75,7 +75,7 @@ struct options {
   std::string dataset_format;
   std::string distance_function;
   int         k{0};
-  double      rho   = 0.8;
+  double      rho   = 0.5;
   double      delta = 0.001;
   std::string knng_dump_dir;
   bool        optimize       = false;
@@ -129,14 +129,14 @@ void usage(ost& os) {
         "\n \tor 'levenshtein' (Levenshtein distance)."
      << "\n -k [int, required] k for KNNG construction."
      << "\n -r [double, optional] rho (sampling) parameter in NN-Descent. "
-        "Default: 0.8."
+        "Default: 0.5."
      << "\n -d [double, optional] delta (terminal condition) parameter in "
         "NN-Descent. Default: 0.001."
      << "\n -b [int, optional] KNNG construction batch size. Default: 2^25."
      << "\n -L [optional] Do not share point store in local node."
      << "\n -A [optional] Do not remove duplicate feature vectors."
      << "\n -P [double, optional] Ratio of FVs to replicate. Between 0 and "
-        "1.0. Default: 0."
+        "1.0. Default: 0.0"
      << "\n -O [optional] Optimize KNNG after construction."
      << "\n -m [double, optional] High-degree edge pruning factor for "
         "optimization.  Default: -1 (no pruning)."

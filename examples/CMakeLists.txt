@@ -13,7 +13,7 @@ function(add_saltatlas_example example_name)
     target_link_libraries(${example_exe} PUBLIC saltatlas)
 endfunction()
 
-add_saltatlas_example(dhnsw_bench)
+#add_saltatlas_example(dhnsw_bench)
 
 if (SALTATLAS_USE_HDF5)
     add_saltatlas_example(benchmark_hdf5)

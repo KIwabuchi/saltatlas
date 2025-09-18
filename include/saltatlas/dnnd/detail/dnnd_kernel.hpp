@@ -46,14 +46,14 @@
 #endif
 
 #include <ygm/comm.hpp>
-#include <ygm/utility.hpp>
+#include <ygm/utility/timer.hpp>
 
 #include <saltatlas/common/detail/neighbor.hpp>
+#include <saltatlas/common/detail/neighbor_cereal.hpp>
 #include <saltatlas/common/detail/utilities/mpi.hpp>
 #include <saltatlas/common/detail/utilities/ygm.hpp>
 #include <saltatlas/dnnd/detail/distance.hpp>
 #include <saltatlas/dnnd/detail/knn_heap.hpp>
-#include <saltatlas/common/detail/neighbor_cereal.hpp>
 #include <saltatlas/dnnd/detail/nn_index.hpp>
 #include "saltatlas/common/point_store.hpp"
 
@@ -228,9 +228,9 @@ class dnnd_kernel {
       if (m_option.verbose) {
         m_comm.cout0() << "\n[Epoch\t" << epoch_no << "]" << std::endl;
       }
-      ygm::timer epoch_timer;
+      ygm::utility::timer epoch_timer;
 
-      ygm::timer    gen_timer;
+      ygm::utility::timer gen_timer;
       adj_lsit_type old_table;
       adj_lsit_type new_table;
       priv_get_old_and_new(old_table, new_table);
@@ -286,7 +286,7 @@ class dnnd_kernel {
   /// This function can accept already partially filled heap.
   void priv_fill_knn_heap_with_random_value() {
     m_comm.cf_barrier();
-    ygm::timer init_timer;
+    ygm::utility::timer init_timer;
 
     // sqrt(k) is enough?
     const std::size_t init_k = m_option.k;
@@ -403,7 +403,7 @@ class dnnd_kernel {
 
   void priv_allocate_knn_heap() {
     m_comm.cf_barrier();
-    ygm::timer timer;
+    ygm::utility::timer timer;
 
     m_knn_heap_table.clear();
 
@@ -820,7 +820,7 @@ class dnnd_kernel {
     if (m_option.verbose) {
       m_comm.cout0() << "\nMini-batch No. " << m_mini_batch_no << std::endl;
     }
-    ygm::timer mini_batch_timer;
+    ygm::utility::timer mini_batch_timer;
 
     const auto local_mini_batch_size = detail::mpi::assign_tasks(
         targets.size(), m_option.mini_batch_size, m_comm.rank(), m_comm.size(),
