@@ -15,6 +15,7 @@
 #include <new>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 #include <spdlog/spdlog.h>
@@ -278,8 +279,12 @@ int main(int argc, char* argv[]) {
 
   if (!opt.output_path.empty()) {
     std::cout << "\nDump KNNG to " << opt.output_path << std::endl;
-    const auto ids_view = saltatlas::solanet::apu_nn::matrix_view<id_type>(
-        index.graph().data_handle(), n_points, opt.k);
+    const auto graph_ids = index.graph().data_handle();
+    using graph_id_type =
+        std::remove_pointer_t<std::remove_cv_t<decltype(graph_ids)>>;
+    const auto ids_view =
+        saltatlas::solanet::apu_nn::matrix_view<graph_id_type>(graph_ids,
+                                                               n_points, opt.k);
     const auto dists_view = saltatlas::solanet::apu_nn::matrix_view<dist_type>(
         index.distances()->data_handle(), n_points, opt.k);
     dump_knng(ids_view, dists_view, opt.output_path, opt.dump_distance);

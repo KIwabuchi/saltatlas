@@ -47,7 +47,11 @@
 
 using namespace saltatlas;
 
+#ifdef SALTATLAS_SOLANET_EXAMPLE_ID_TYPE
+using id_type = SALTATLAS_SOLANET_EXAMPLE_ID_TYPE;
+#else
 using id_type = uint32_t;
+#endif
 #ifdef SALTATLAS_FEATURE_ELEMENT_TYPE
 using fe_type = SALTATLAS_FEATURE_ELEMENT_TYPE;
 #else

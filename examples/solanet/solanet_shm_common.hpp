@@ -7,13 +7,17 @@
 
 #include <unordered_map>
 
+#ifdef SALTATLAS_SOLANET_EXAMPLE_ID_TYPE
+using id_type = SALTATLAS_SOLANET_EXAMPLE_ID_TYPE;
+#else
 using id_type = uint32_t;
+#endif
 #ifdef SALTATLAS_FEATURE_ELEMENT_TYPE
 using fe_type = SALTATLAS_FEATURE_ELEMENT_TYPE;
 #else
 using fe_type = float;
 #endif
-using dist_type = float;
+using dist_type       = float;
 using e2i_id_map_type = std::unordered_map<id_type, id_type>;
 
 inline void show_index_score(const dist_type* dists, const size_t n_points,
@@ -38,8 +42,9 @@ inline void show_index_score(const dist_type* dists, const size_t n_points,
   }
 }
 
+template <typename KNNIDType>
 inline void dump_knng(
-    const saltatlas::solanet::apu_nn::matrix_view<id_type>&   knn_ids,
+    const saltatlas::solanet::apu_nn::matrix_view<KNNIDType>& knn_ids,
     const saltatlas::solanet::apu_nn::matrix_view<dist_type>& knn_dists,
     const std::filesystem::path&                              output_path,
     const bool dump_distance = false) {
@@ -53,7 +58,7 @@ inline void dump_knng(
   for (size_t sid = 0; sid < n_points; ++sid) {
     ofs << sid << " ";
     for (size_t i = 0; i < k; ++i) {
-      const id_type nid = knn_ids(sid, i);
+      const id_type nid = static_cast<id_type>(knn_ids(sid, i));
       ofs << nid;
       if (i + 1 < k) {
         ofs << " ";

@@ -54,10 +54,11 @@ SALTATLAS_HD_GLOBAL void build_ranked_knng_kernel(
     const matrix_view<const dist_type> in_knng_dists,
     matrix_view<id_type> ranked_knng, matrix_view<dist_type> ranked_knng_ranks,
     const size_t map_capacity, id_type* map_keys, int* map_vals) {
-  const int tid    = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
-  const int stride = static_cast<int>(gridDim.x * blockDim.x);
-  const int n_rows = static_cast<int>(in_knng_ids.n_rows());
-  const int k      = static_cast<int>(in_knng_ids.n_cols());
+  const size_t tid = static_cast<size_t>(blockIdx.x) * blockDim.x +
+                     static_cast<size_t>(threadIdx.x);
+  const size_t stride = static_cast<size_t>(gridDim.x) * blockDim.x;
+  const size_t n_rows = in_knng_ids.n_rows();
+  const int    k      = static_cast<int>(in_knng_ids.n_cols());
   if (k == 0) {
     return;
   }
@@ -65,7 +66,7 @@ SALTATLAS_HD_GLOBAL void build_ranked_knng_kernel(
   id_type ids_local[k_query_graph_max_k];
   int     counts_local[k_query_graph_max_k];
 
-  for (id_type sid = tid; sid < n_rows; sid += stride) {
+  for (size_t sid = tid; sid < n_rows; sid += stride) {
     simple_map<id_type, int> pos_map(map_capacity,
                                      map_keys + sid * map_capacity,
                                      map_vals + sid * map_capacity);
@@ -137,11 +138,12 @@ SALTATLAS_HD_GLOBAL void merge_ranked_knng_kernel(
     const id_type* r_ids, const dist_type* r_ranks,
     matrix_view<id_type> out_query_nids, const size_t set_capacity,
     id_type* set_keys) {
-  const int tid    = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
-  const int stride = static_cast<int>(gridDim.x * blockDim.x);
-  const int n_rows = static_cast<int>(ranked_knng.n_rows());
-  const int in_k   = static_cast<int>(ranked_knng.n_cols());
-  const int out_k  = static_cast<int>(out_query_nids.n_cols());
+  const size_t tid = static_cast<size_t>(blockIdx.x) * blockDim.x +
+                     static_cast<size_t>(threadIdx.x);
+  const size_t stride = static_cast<size_t>(gridDim.x) * blockDim.x;
+  const size_t n_rows = ranked_knng.n_rows();
+  const int    in_k   = static_cast<int>(ranked_knng.n_cols());
+  const int    out_k  = static_cast<int>(out_query_nids.n_cols());
   if (in_k == 0 || out_k == 0) {
     return;
   }
@@ -152,7 +154,7 @@ SALTATLAS_HD_GLOBAL void merge_ranked_knng_kernel(
   id_type   out_ids[k_query_graph_max_k];
   dist_type out_ranks[k_query_graph_max_k];
 
-  for (int sid = tid; sid < n_rows; sid += stride) {
+  for (size_t sid = tid; sid < n_rows; sid += stride) {
     simple_set<id_type> used(set_capacity, set_keys + sid * set_capacity);
     used.clear();
 
@@ -261,13 +263,13 @@ inline void make_optimized_query_graph_apu(
     matrix_view<id_type>            out_query_nids,
     const query_graph_distance_mode distance_mode =
         query_graph_distance_mode::actual_distance) {
-  const int n_pts = static_cast<int>(in_knng_ids.n_rows());
-  const int in_k  = static_cast<int>(in_knng_ids.n_cols());
-  const int out_k = static_cast<int>(out_query_nids.n_cols());
+  const size_t n_pts = in_knng_ids.n_rows();
+  const int    in_k  = static_cast<int>(in_knng_ids.n_cols());
+  const int    out_k = static_cast<int>(out_query_nids.n_cols());
   if (n_pts == 0 || in_k == 0 || out_k == 0) {
     return;
   }
-  assert(out_query_nids.n_rows() == static_cast<size_t>(n_pts));
+  assert(out_query_nids.n_rows() == n_pts);
   if (out_k > in_k) {
     throw std::invalid_argument(
         "make_optimized_query_graph_apu: output k exceeds input k.");
@@ -287,10 +289,8 @@ inline void make_optimized_query_graph_apu(
   // Allocate extra space to keep the load factor of the map low (50%).
   spdlog::trace("Allocate map for counting detours");
   const int map_capacity = in_k * 2 + 1;
-  auto      map_keys =
-      make_hip_array<id_type>(static_cast<size_t>(n_pts) * map_capacity);
-  auto map_vals =
-      make_hip_array<int>(static_cast<size_t>(n_pts) * map_capacity);
+  auto      map_keys     = make_hip_array<id_type>(n_pts * map_capacity);
+  auto      map_vals     = make_hip_array<int>(n_pts * map_capacity);
 
   const auto grid = detail::make_grid_1d(n_pts, detail::k_query_block_size);
   if (distance_mode == query_graph_distance_mode::knng_position) {
@@ -336,8 +336,8 @@ inline void make_optimized_query_graph_apu(
 
   // TODO: try to reduce memory
   // in_k * 2 + 1 is too large
-  const int set_cap = in_k * 2 + 1;
-  auto set_keys = make_hip_array<id_type>(static_cast<size_t>(n_pts) * set_cap);
+  const int set_cap  = in_k * 2 + 1;
+  auto      set_keys = make_hip_array<id_type>(n_pts * set_cap);
 
   hipLaunchKernelGGL(
       (detail::merge_ranked_knng_kernel<id_type, dist_type>), grid,
@@ -357,7 +357,7 @@ inline void make_optimized_query_graph(
     matrix_view<id_type>          out_query_nids) {
   using knn_heap_t          = dndetail::unique_knn_heap<id_type, int>;
   using knn_heap_adj_list_t = std::vector<knn_heap_t>;
-  const int n_points        = in_knng_ids.n_rows();
+  const size_t n_points     = in_knng_ids.n_rows();
   // Assumes that out_query_nids is already allocated
   assert(out_query_nids.n_rows() == n_points);
   assert(out_query_nids.n_cols() == in_knng_ids.n_cols());
@@ -365,7 +365,7 @@ inline void make_optimized_query_graph(
 #ifndef NDEBUG
   // Check knng does not contain duplicates neighbors
     OMP_DIRECTIVE(parallel for)
-    for (int i = 0; i < n_points; ++i) {
+    for (size_t i = 0; i < n_points; ++i) {
       std::unordered_set<id_type> neighbor_set;
       for (int j = 0; j < in_knng_ids.n_cols(); ++j) {
         const auto neighbor_id = in_knng_ids(i, j);
@@ -386,7 +386,7 @@ inline void make_optimized_query_graph(
     matrix<int> detour_counts_table(n_points, in_knng_ids.n_cols());
     std::vector<boost::unordered_flat_map<id_type, int>> pos_maps(n_points);
     OMP_DIRECTIVE(parallel for)
-    for (id_type sid = 0; sid < n_points; ++sid) {
+    for (size_t sid = 0; sid < n_points; ++sid) {
       for (int i = 0; i < in_knng_ids.n_cols(); ++i) {
         detour_counts_table(sid, i)        = 0;
         pos_maps[sid][in_knng_ids(sid, i)] = i;
@@ -395,7 +395,7 @@ inline void make_optimized_query_graph(
 
     // Count detours
     OMP_DIRECTIVE(parallel for)
-    for (id_type sid = 0; sid < n_points; ++sid) {
+    for (size_t sid = 0; sid < n_points; ++sid) {
       for (int i = 0; i < in_knng_ids.n_cols(); ++i) {
         // Transfer point
         const auto tid     = in_knng_ids(sid, i);
@@ -427,7 +427,7 @@ inline void make_optimized_query_graph(
     // Sort neighbors by detour counts (ascending)
     // Less detourable neighbors come first
     OMP_DIRECTIVE(parallel for)
-    for (id_type sid = 0; sid < n_points; ++sid) {
+    for (size_t sid = 0; sid < n_points; ++sid) {
       std::sort(ranked_knng(sid), ranked_knng(sid) + ranked_knng.n_cols(),
                 [&](const id_type a, const id_type b) {
                   const size_t count_a =
@@ -450,12 +450,12 @@ inline void make_optimized_query_graph(
                                                knn_heap_t(out_query_nids.n_cols()));
     std::vector<std::mutex> mutexes(2048);
     OMP_DIRECTIVE(parallel for)
-    for (id_type sid = 0; sid < ranked_knng.n_rows(); ++sid) {
+    for (size_t sid = 0; sid < ranked_knng.n_rows(); ++sid) {
       for (int i = 0; i < ranked_knng.n_cols(); ++i) {
         const auto tid = ranked_knng(sid, i);
         {
           std::lock_guard<std::mutex> lock(mutexes[tid % mutexes.size()]);
-          r_ranked_knng_heap[tid].try_add(sid, i);
+          r_ranked_knng_heap[tid].try_add(static_cast<id_type>(sid), i);
         }
       }
     }
@@ -466,7 +466,7 @@ inline void make_optimized_query_graph(
     // Merge the half of the neighbors with the lowest detour counts in
     // ranked_knng and r_ranked_knng_heap
     OMP_DIRECTIVE(parallel for)
-    for (id_type sid = 0; sid < ranked_knng.n_rows(); ++sid) {
+    for (size_t sid = 0; sid < ranked_knng.n_rows(); ++sid) {
       knn_heap_t knn_heap(out_query_nids.n_cols());
       assert(ranked_knng.n_cols() >= knn_heap.k() / 2);
       for (int i = 0; i < knn_heap.k() / 2; ++i) {

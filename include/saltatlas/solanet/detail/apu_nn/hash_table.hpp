@@ -43,9 +43,11 @@ class simple_set_kernel {
                                                   const int      capacity,
                                                   const KeyType  invalid_key,
                                                   KeyType* const keys) {
-    const int hash = static_cast<int>(key) % capacity;
+    const size_t hash =
+        static_cast<size_t>(key) % static_cast<size_t>(capacity);
     for (int i = 0; i < static_cast<int>(capacity); ++i) {
-      const int idx = (hash + i) % capacity;
+      const size_t idx =
+          (hash + static_cast<size_t>(i)) % static_cast<size_t>(capacity);
       if (keys[idx] == invalid_key) {
         // Empty slot found, add the key
         keys[idx] = key;
@@ -62,9 +64,11 @@ class simple_set_kernel {
   SALTATLAS_HD_HD static bool contains(const KeyType key, const int capacity,
                                        const KeyType  invalid_key,
                                        KeyType* const keys) {
-    const int hash = static_cast<int>(key) % capacity;
+    const size_t hash =
+        static_cast<size_t>(key) % static_cast<size_t>(capacity);
     for (int i = 0; i < static_cast<int>(capacity); ++i) {
-      const int idx = (hash + i) % capacity;
+      const size_t idx =
+          (hash + static_cast<size_t>(i)) % static_cast<size_t>(capacity);
       if (keys[idx] == invalid_key) {
         // Empty slot found, key not present
         return false;
@@ -79,9 +83,11 @@ class simple_set_kernel {
   SALTATLAS_HD_HD static int find(const KeyType key, const int capacity,
                                   const KeyType  invalid_key,
                                   KeyType* const keys) {
-    const int hash = static_cast<int>(key) % capacity;
+    const size_t hash =
+        static_cast<size_t>(key) % static_cast<size_t>(capacity);
     for (int i = 0; i < static_cast<int>(capacity); ++i) {
-      const int idx = (hash + i) % capacity;
+      const size_t idx =
+          (hash + static_cast<size_t>(i)) % static_cast<size_t>(capacity);
       if (keys[idx] == invalid_key) {
         // Empty slot found, key not present
         return -1;

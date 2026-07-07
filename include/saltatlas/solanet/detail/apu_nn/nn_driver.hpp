@@ -12,9 +12,11 @@
 #include <cstdint>
 #include <cstring>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 
 #include <hip/hip_runtime.h>
@@ -90,6 +92,17 @@ SALTATLAS_HD_GLOBAL void update_index_kernel(
     master_ids_row[pos]   = cid;
   }
 }
+
+template <typename OutType, typename InType>
+SALTATLAS_HD_GLOBAL void cast_values_kernel(const InType* in, OutType* out,
+                                            const size_t n) {
+  const size_t stride = static_cast<size_t>(gridDim.x) * blockDim.x;
+  size_t       idx = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  while (idx < n) {
+    out[idx] = static_cast<OutType>(in[idx]);
+    idx += stride;
+  }
+}
 }  // namespace
 
 template <typename IDType, typename FeatureElemType, typename DistanceType>
@@ -113,8 +126,10 @@ class driver {
   };
 
  private:
+  using cagra_id_type = uint32_t;
+
   // CAGRA Index: dataset and knng
-  using cagra_index_t = cuvs::neighbors::cagra::index<fe_type, id_type>;
+  using cagra_index_t = cuvs::neighbors::cagra::index<fe_type, cagra_id_type>;
   using rmm_mem_pool_t =
       rmm::mr::pool_memory_resource<rmm::mr::device_memory_resource>;
 
@@ -342,11 +357,16 @@ class driver {
     auto queries = d3cvs::make_dev_matrix_view(
         query_pstore.data(), query_pstore.size(), query_pstore.dims());
     const auto n_queries = queries.extent(0);
+    if (trg_pstore.size() >
+        static_cast<size_t>(std::numeric_limits<cagra_id_type>::max())) {
+      throw std::overflow_error(
+          "CAGRA search supports at most uint32_t local target IDs.");
+    }
 
-    d3cvs::d_matrix_type<fe_type>            local_trg_pstore{m_dev_res};
-    d3cvs::d_matrix_type<id_type>            local_trg_index{m_dev_res};
-    d3cvs::d_matrix_view_type<const fe_type> local_trg_pstore_view;
-    d3cvs::d_matrix_view_type<const id_type> local_trg_index_view;
+    d3cvs::d_matrix_type<fe_type>                  local_trg_pstore{m_dev_res};
+    d3cvs::d_matrix_type<cagra_id_type>            local_trg_index{m_dev_res};
+    d3cvs::d_matrix_view_type<const fe_type>       local_trg_pstore_view;
+    d3cvs::d_matrix_view_type<const cagra_id_type> local_trg_index_view;
     if (copy_query_to_gpu) {
       spdlog::trace("Copy query data");
       saltatlas::rec_time().start("Copy-query-data");
@@ -354,20 +374,45 @@ class driver {
           d3cvs::make_host_matrix_view(trg_pstore.data(), trg_pstore.size(),
                                        trg_pstore.dims()),
           m_dev_res);
-      local_trg_index =
-          d3cvs::copy_to_dev(d3cvs::make_host_matrix_view(
-                                 trg_index.neighbor_ids_data(),
-                                 trg_index.size(), trg_index.num_neighbors()),
-                             m_dev_res);
+      if constexpr (std::is_same_v<id_type, cagra_id_type>) {
+        local_trg_index =
+            d3cvs::copy_to_dev(d3cvs::make_host_matrix_view(
+                                   trg_index.neighbor_ids_data(),
+                                   trg_index.size(), trg_index.num_neighbors()),
+                               m_dev_res);
+      } else {
+        auto local_trg_index_src =
+            d3cvs::copy_to_dev(d3cvs::make_host_matrix_view(
+                                   trg_index.neighbor_ids_data(),
+                                   trg_index.size(), trg_index.num_neighbors()),
+                               m_dev_res);
+        local_trg_index = d3cvs::make_dev_matrix<cagra_id_type>(
+            trg_index.size(), trg_index.num_neighbors(), m_dev_res);
+        cast_device_values(local_trg_index_src.data_handle(),
+                           local_trg_index.data_handle(),
+                           local_trg_index_src.size());
+      }
       saltatlas::rec_time().stop();  // Copy-query-data
       local_trg_pstore_view = d3cvs::make_const_matrix_view(local_trg_pstore);
       local_trg_index_view  = d3cvs::make_const_matrix_view(local_trg_index);
     } else {
       local_trg_pstore_view = d3cvs::make_dev_matrix_view(
           trg_pstore.data(), trg_pstore.size(), trg_pstore.dims());
-      local_trg_index_view = d3cvs::make_dev_matrix_view(
-          trg_index.neighbor_ids_data(), trg_index.size(),
-          trg_index.num_neighbors());
+      if constexpr (std::is_same_v<id_type, cagra_id_type>) {
+        local_trg_index_view = d3cvs::make_dev_matrix_view(
+            trg_index.neighbor_ids_data(), trg_index.size(),
+            trg_index.num_neighbors());
+      } else {
+        auto local_trg_index_src = d3cvs::make_dev_matrix_view(
+            trg_index.neighbor_ids_data(), trg_index.size(),
+            trg_index.num_neighbors());
+        local_trg_index = d3cvs::make_dev_matrix<cagra_id_type>(
+            trg_index.size(), trg_index.num_neighbors(), m_dev_res);
+        cast_device_values(local_trg_index_src.data_handle(),
+                           local_trg_index.data_handle(),
+                           local_trg_index_src.size());
+        local_trg_index_view = d3cvs::make_const_matrix_view(local_trg_index);
+      }
     }
 
     if (m_query_result_nids.extent(0) != n_queries ||
@@ -377,6 +422,14 @@ class driver {
           d3cvs::make_dev_matrix<id_type>(n_queries, query_k, m_dev_res);
       m_query_result_dists =
           d3cvs::make_dev_matrix<dist_type>(n_queries, query_k, m_dev_res);
+    }
+    if constexpr (!std::is_same_v<id_type, cagra_id_type>) {
+      if (m_cagra_query_result_nids.extent(0) != n_queries ||
+          m_cagra_query_result_nids.extent(1) != static_cast<size_t>(query_k)) {
+        m_cagra_query_result_nids =
+            d3cvs::make_dev_matrix<cagra_id_type>(n_queries, query_k,
+                                                  m_dev_res);
+      }
     }
 
     // https://github.com/ROCm-DS/hipVS/blob/release/rocmds-25.10/cpp/include/cuvs/neighbors/cagra.hpp#L175
@@ -394,7 +447,6 @@ class driver {
     // CAGRA Index: dataset and knng
     spdlog::trace("Const CAGRA index");
     saltatlas::rec_time().start("Const-cagra-index");
-    using cagra_index_t = cuvs::neighbors::cagra::index<fe_type, id_type>;
     cagra_index_t cagra_index =
         priv_const_cagra_index(local_trg_pstore_view, local_trg_index_view);
     raft::resource::sync_stream(m_dev_res);
@@ -407,9 +459,19 @@ class driver {
 
     spdlog::trace("Search");
     saltatlas::rec_time().start("Search");
-    cuvs::neighbors::cagra::search(m_dev_res, search_params, cagra_index,
-                                   queries, m_query_result_nids.view(),
-                                   m_query_result_dists.view());
+    if constexpr (std::is_same_v<id_type, cagra_id_type>) {
+      cuvs::neighbors::cagra::search(m_dev_res, search_params, cagra_index,
+                                     queries, m_query_result_nids.view(),
+                                     m_query_result_dists.view());
+    } else {
+      cuvs::neighbors::cagra::search(m_dev_res, search_params, cagra_index,
+                                     queries,
+                                     m_cagra_query_result_nids.view(),
+                                     m_query_result_dists.view());
+      cast_device_values(m_cagra_query_result_nids.data_handle(),
+                         m_query_result_nids.data_handle(),
+                         m_cagra_query_result_nids.size());
+    }
     raft::resource::sync_stream(m_dev_res);
     const auto elapsed_sec = saltatlas::rec_time().stop();
     spdlog::trace("Finished searching");
@@ -430,7 +492,7 @@ class driver {
 
   cagra_index_t priv_const_cagra_index(
       d3cvs::d_matrix_view_type<const fe_type> dataset,
-      d3cvs::d_matrix_view_type<const id_type> knng) {
+      d3cvs::d_matrix_view_type<const cagra_id_type> knng) {
     try {
       // std::cout << "CAGRA index dataset = " << dataset.extent(0) << " x "
       //           << dataset.extent(1) << std::endl;
@@ -453,11 +515,29 @@ class driver {
     return cagra_index_t(m_dev_res);
   }
 
+  template <typename InType, typename OutType>
+  void cast_device_values(const InType* in, OutType* out, const size_t n) {
+    if (n == 0) {
+      return;
+    }
+    constexpr size_t block_size = 256;
+    const dim3       block(block_size);
+    const dim3       grid((n + block_size - 1) / block_size);
+    hipLaunchKernelGGL((cast_values_kernel<OutType, InType>), grid, block, 0,
+                       nullptr, in, out, n);
+    SALTATLAS_HIP_CHECK(hipGetLastError());
+    SALTATLAS_HIP_CHECK(hipDeviceSynchronize());
+  }
+
   void priv_setup_rmm(const size_t n_queries, const int query_k) {
     // result nids and dists for query search.
     size_t cuvs_memory_pool_reserve_bytes =
         n_queries * query_k * sizeof(id_type) +
         n_queries * query_k * sizeof(dist_type);
+    if constexpr (!std::is_same_v<id_type, cagra_id_type>) {
+      cuvs_memory_pool_reserve_bytes +=
+          n_queries * query_k * sizeof(cagra_id_type);
+    }
     cuvs_memory_pool_reserve_bytes *= 2;
     // Align to 256MB for better memory pool performance
     constexpr size_t k_align = 256ULL << 20;
@@ -490,8 +570,9 @@ class driver {
   cuvs::distance::DistanceType    m_cagra_dist_func;
   bool                            m_verbose{false};
 
-  d3cvs::d_matrix_type<id_type>   m_query_result_nids{m_dev_res};
-  d3cvs::d_matrix_type<dist_type> m_query_result_dists{m_dev_res};
+  d3cvs::d_matrix_type<id_type>      m_query_result_nids{m_dev_res};
+  d3cvs::d_matrix_type<cagra_id_type> m_cagra_query_result_nids{m_dev_res};
+  d3cvs::d_matrix_type<dist_type>    m_query_result_dists{m_dev_res};
 };
 
 }  // namespace saltatlas::solanet::apu_nn

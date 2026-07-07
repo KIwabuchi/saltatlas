@@ -52,14 +52,16 @@ constexpr int k_cagra_block_size = 256;
 constexpr int k_max_search_buf_size =
     SALTATLAS_SOLANET_APU_NN_SEARCH_MAX_BUF_SIZE;
 static constexpr int k_search_team_size = 8;
-using visit_set_t                       = simple_set<uint32_t>;
+template <typename IDType>
+using visit_set_t = simple_set<IDType>;
 
 template <typename IDType>
 SALTATLAS_HD_DEVICE inline void select_initial_search_points(
     const size_t n_points, const int n_to_select, const uint64_t seed,
-    IDType* out_ids, visit_set_t& visited) {
+    IDType* out_ids, visit_set_t<IDType>& visited) {
   rnd_state_type state;
-  rnd_init(blockDim.x * blockIdx.x + threadIdx.x, seed, state);
+  rnd_init(static_cast<uint64_t>(blockIdx.x) * blockDim.x + threadIdx.x, seed,
+           state);
 
   int n_selected = 0;
   while (n_selected < n_to_select) {
@@ -199,7 +201,7 @@ template <typename IDType>
 SALTATLAS_HD_DEVICE inline int explore_neighbors(
     const matrix_view<IDType> knng_ids, const int search_width,
     const int frontier_size, IDType* const frontier_ids, IDType* const next_ids,
-    visit_set_t& visited_set) {
+    visit_set_t<IDType>& visited_set) {
   static constexpr auto k_invalid_id = std::numeric_limits<IDType>::max();
   // Only one thred in the warp calls this function
   assert((threadIdx.x % warpSize) == 0);
@@ -267,9 +269,9 @@ __global__ void search_kernel(
   IDType*   next_ids       = buf_ids + frontier_size;
   DistType* next_dists     = buf_dists + frontier_size;
 
-  IDType*     visit_buf = get_shared_mem<IDType>(shared_ptr, visited_set_cap,
-                                                 n_local_warps, l_warp_id);
-  visit_set_t visited(visited_set_cap, visit_buf);
+  IDType* visit_buf = get_shared_mem<IDType>(shared_ptr, visited_set_cap,
+                                             n_local_warps, l_warp_id);
+  visit_set_t<IDType> visited(visited_set_cap, visit_buf);
   if (lane_id == 0) {
     visited.clear();
   }

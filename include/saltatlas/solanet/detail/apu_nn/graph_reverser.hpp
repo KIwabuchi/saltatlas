@@ -90,11 +90,12 @@ SALTATLAS_HD_GLOBAL void cast_offsets_kernel(const uint64_t* in_offsets,
 }
 
 // Zero-initializes per-vertex write cursors for edge filling.
-SALTATLAS_HD_GLOBAL void zero_u32_kernel(uint32_t* data, const size_t n) {
+template <typename count_type>
+SALTATLAS_HD_GLOBAL void zero_counts_kernel(count_type* data, const size_t n) {
   const size_t stride = static_cast<size_t>(gridDim.x) * blockDim.x;
   size_t       idx = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
   while (idx < n) {
-    data[idx] = 0;
+    data[idx] = count_type{0};
     idx += stride;
   }
 }
@@ -105,7 +106,7 @@ template <typename id_type, typename dist_type>
 SALTATLAS_HD_GLOBAL void fill_reverse_csr_kernel(
     const matrix_view<const id_type>   in_knng_ids,
     const matrix_view<const dist_type> in_knng_values, const uint64_t* offsets,
-    uint32_t* write_counts, id_type* out_ids, dist_type* out_distances) {
+    uint64_t* write_counts, id_type* out_ids, dist_type* out_distances) {
   const size_t total_edges = in_knng_ids.size();
   const size_t degree      = in_knng_ids.n_cols();
   const size_t stride      = static_cast<size_t>(gridDim.x) * blockDim.x;
@@ -120,8 +121,8 @@ SALTATLAS_HD_GLOBAL void fill_reverse_csr_kernel(
       const uint64_t begin   = offsets[nid_idx];
       const uint64_t end     = offsets[nid_idx + 1];
       const uint64_t limit   = end - begin;
-      const uint32_t pos     = atomicAdd(&write_counts[nid_idx], 1U);
-      if (static_cast<uint64_t>(pos) < limit) {
+      const uint64_t pos     = atomicAdd(&write_counts[nid_idx], 1ULL);
+      if (pos < limit) {
         const size_t out_pos   = static_cast<size_t>(begin + pos);
         out_ids[out_pos]       = static_cast<id_type>(sid);
         out_distances[out_pos] = in_knng_values(sid, col);
@@ -229,9 +230,10 @@ inline csr_graph<id_type, dist_type> make_reversed_graph_apu(
     return out;
   }
 
-  auto write_counts = make_hip_array<uint32_t>(n_vertices);
-  hipLaunchKernelGGL((detail::zero_u32_kernel), clip_grid, dim3(k_block_size),
-                     0, nullptr, write_counts.get(), n_vertices);
+  auto write_counts = make_hip_array<uint64_t>(n_vertices);
+  hipLaunchKernelGGL((detail::zero_counts_kernel<uint64_t>), clip_grid,
+                     dim3(k_block_size), 0, nullptr, write_counts.get(),
+                     n_vertices);
   SALTATLAS_HIP_CHECK(hipGetLastError());
 
   hipLaunchKernelGGL(

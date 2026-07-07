@@ -553,7 +553,7 @@ SALTATLAS_HD_GLOBAL void update_knng_with_candidates(
       static_cast<size_t>(blockIdx.x) * static_cast<size_t>(blockDim.x) +
       static_cast<size_t>(threadIdx.x);
   // const auto   block_id = blockIdx.x;
-  const IDType sid = static_cast<int>(g_tid);
+  const size_t sid = g_tid;
   if (sid >= knng_ids.n_rows()) {
     return;
   }
@@ -625,10 +625,10 @@ SALTATLAS_HD_GLOBAL void update_knng_with_candidates(
 #ifndef NDEBUG
   sort_neighbors_single_thread(nids, dists, k, false);
   if (remove_duplicate_neighbors(nids, dists, k) != k) {
-    printf("Duplicates found in KNNG list of point %d after update.\n", sid);
+    printf("Duplicates found in KNNG list of point %zu after update.\n", sid);
     for (int i = 0; i < k; ++i) {
-      printf("%d  Neighbor %d: ID %u, distance %f\n", sid, i,
-             clear_msb(nids[i]), dists[i]);
+      printf("%zu  Neighbor %d: ID %llu, distance %f\n", sid, i,
+             static_cast<unsigned long long>(clear_msb(nids[i])), dists[i]);
     }
     assert(false && "Duplicates found in KNNG list after update.");
   }
@@ -648,13 +648,15 @@ SALTATLAS_HD_GLOBAL void update_knng_with_candidates(
       }
       printf(
           "Distance at position %d is equal to distance at position %d but "
-          "ID is greater for point %d. ID %u and %u (distance %f and %f)\n",
-          i, i + 1, sid, clear_msb(nids[i]), clear_msb(nids[i + 1]), dists[i],
+          "ID is greater for point %zu. ID %llu and %llu (distance %f and "
+          "%f)\n",
+          i, i + 1, sid, static_cast<unsigned long long>(clear_msb(nids[i])),
+          static_cast<unsigned long long>(clear_msb(nids[i + 1])), dists[i],
           dists[i + 1]);
     } else if (dists[i] > dists[i + 1]) {
       printf(
           "Distance at position %d is greater than distance at position %d "
-          "for point %d. Distance %f and %f\n",
+          "for point %zu. Distance %f and %f\n",
           i, i + 1, sid, dists[i], dists[i + 1]);
     }
 
@@ -668,9 +670,10 @@ SALTATLAS_HD_GLOBAL void update_knng_with_candidates(
     for (int j = i + 1; j < k; ++j) {
       if (clear_msb(nids[i]) == clear_msb(nids[j])) {
         printf(
-            "Duplicate neighbor ID %u found in KNNG list of point %d at "
+            "Duplicate neighbor ID %llu found in KNNG list of point %zu at "
             "positions %d and %d. Distance %f and %f\n",
-            clear_msb(nids[i]), sid, i, j, dists[i], dists[j]);
+            static_cast<unsigned long long>(clear_msb(nids[i])), sid, i, j,
+            dists[i], dists[j]);
       }
       assert(clear_msb(nids[i]) != clear_msb(nids[j]));
     }
@@ -906,7 +909,8 @@ std::pair<matrix<IDType>, matrix<DistType>> build_index(
     const matrix_view<FEType>& pstore, const int k, const float rho,
     const float delta, const uint64_t seed = 0x12345678abcdefULL,
     const int max_iterations = 100) {
-  static_assert(sizeof(IDType) == 4, "IDType must be 32-bit.");
+  static_assert(std::is_integral_v<IDType> && std::is_unsigned_v<IDType>,
+                "IDType must be an unsigned integral type.");
   if (!pstore.data()) {
     throw std::invalid_argument("Point store is not initialized.");
   }
@@ -951,11 +955,8 @@ std::pair<matrix<IDType>, matrix<DistType>> build_index(
   const size_t n_warps_per_block = block.x / k_warp_size;
   const size_t n_warp_blocks =
       (n_points + n_warps_per_block - 1) / n_warps_per_block;
-  const size_t max_warp_blocks_by_tid =
-      std::numeric_limits<uint32_t>::max() / static_cast<size_t>(block.x);
-  const size_t n_warp_blocks_launch = std::min(
-      n_warp_blocks, std::min(static_cast<size_t>(device_prop.maxGridSize[0]),
-                              max_warp_blocks_by_tid));
+  const size_t n_warp_blocks_launch =
+      std::min(n_warp_blocks, static_cast<size_t>(device_prop.maxGridSize[0]));
   if (n_warp_blocks_launch == 0) {
     throw std::runtime_error("Neighbor check launch grid size became zero.");
   }

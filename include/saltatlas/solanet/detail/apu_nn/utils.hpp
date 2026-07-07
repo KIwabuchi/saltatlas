@@ -46,16 +46,17 @@
 
 namespace saltatlas::solanet::apu_nn {
 
-SALTATLAS_HD_DEVICE SALTATLAS_HD_FORCEINLINE int get_global_thread_id() {
-  return blockIdx.x * blockDim.x + threadIdx.x;
+SALTATLAS_HD_DEVICE SALTATLAS_HD_FORCEINLINE size_t get_global_thread_id() {
+  return static_cast<size_t>(blockIdx.x) * static_cast<size_t>(blockDim.x) +
+         static_cast<size_t>(threadIdx.x);
 }
 
-SALTATLAS_HD_DEVICE SALTATLAS_HD_FORCEINLINE int get_global_thread_count() {
-  return gridDim.x * blockDim.x;
+SALTATLAS_HD_DEVICE SALTATLAS_HD_FORCEINLINE size_t get_global_thread_count() {
+  return static_cast<size_t>(gridDim.x) * static_cast<size_t>(blockDim.x);
 }
 
 template <int kWarpSize = 64>
-SALTATLAS_HD_DEVICE SALTATLAS_HD_FORCEINLINE int get_global_warp_id() {
+SALTATLAS_HD_DEVICE SALTATLAS_HD_FORCEINLINE size_t get_global_warp_id() {
   return get_global_thread_id() /
          kWarpSize;  // Assuming warp size of 64 for MI300A
 }
@@ -113,7 +114,7 @@ lcg_rand(uint64_t& state, const uint64_t range) {
 
 using rnd_state_type = rocrand_state_xorwow;
 
-SALTATLAS_HD_HD SALTATLAS_HD_FORCEINLINE void rnd_init(const int       tid,
+SALTATLAS_HD_HD SALTATLAS_HD_FORCEINLINE void rnd_init(const uint64_t  tid,
                                                        const uint64_t  seed,
                                                        rnd_state_type& state) {
   rocrand_init(seed, tid, 0, &state);
