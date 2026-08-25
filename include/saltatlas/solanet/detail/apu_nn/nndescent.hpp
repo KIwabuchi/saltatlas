@@ -57,6 +57,8 @@ static constexpr int k_nnd_block_size = 128;
 static constexpr int k_team_size      = SALTATLAS_SOLANET_APU_NND_TEAM_SIZE;
 static constexpr int k_top_candidates =
     SALTATLAS_SOLANET_APU_NND_TOP_CANDIDATES;
+static_assert(k_warp_size % k_team_size == 0,
+              "SALTATLAS_SOLANET_APU_NND_TEAM_SIZE must divide warp size.");
 #if SALTATLAS_SOLANET_APU_NND_TOP_CANDIDATES != 0 && \
     SALTATLAS_SOLANET_APU_NND_TOP_CANDIDATES != 1 && \
     SALTATLAS_SOLANET_APU_NND_TOP_CANDIDATES != 2 && \
@@ -719,11 +721,12 @@ void build_index_main_loop(
     const matrix_view<FEType>& pstore, const int k, const int p_new,
     const int p_old, const float delta, const int max_iterations,
     const hipDeviceProp_t& device_prop, const dim3& grid_points,
-    const dim3& grid_warp_points, const dim3& block, const size_t n_blocks,
-    matrix_view<IDType> knng_ids, matrix_view<DistType> knng_dists,
-    matrix_view<IDType> old_ng, hip_unique_ptr<int>& old_counts,
-    matrix_view<IDType> new_ng, hip_unique_ptr<int>& new_counts,
-    hip_unique_ptr<int>& old_counts_wk, hip_unique_ptr<int>& new_counts_wk) {
+    const dim3& grid_warp_points, const dim3& block, const dim3& warp_block,
+    const size_t n_blocks, matrix_view<IDType> knng_ids,
+    matrix_view<DistType> knng_dists, matrix_view<IDType> old_ng,
+    hip_unique_ptr<int>& old_counts, matrix_view<IDType> new_ng,
+    hip_unique_ptr<int>& new_counts, hip_unique_ptr<int>& old_counts_wk,
+    hip_unique_ptr<int>& new_counts_wk) {
   const size_t     n_points = pstore.n_rows();
   matrix<IDType>   candidate_ids(n_points, k);
   matrix<DistType> candidate_dists(n_points, k);
@@ -807,7 +810,7 @@ void build_index_main_loop(
     /// KNNG
     auto neighbor_checker = [&](const matrix_view<IDType>& nbs1,
                                 const matrix_view<IDType>& nbs2) {
-      const size_t n_teams_per_block = block.x / k_team_size;
+      const size_t n_teams_per_block = warp_block.x / k_team_size;
       const size_t ck_shared_bytes =
           n_teams_per_block * static_cast<size_t>(k) * sizeof(IDType);
       if (ck_shared_bytes > device_prop.sharedMemPerBlock) {
@@ -823,10 +826,20 @@ void build_index_main_loop(
       rec_time().stop();  // init neighbor checks
 
       rec_time().start("neighbor_checks");
+      spdlog::trace(
+          "Launch find_new_neighbor_candidates: grid=({}, {}, {}), "
+          "block=({}, {}, {}), dynamic_shared_bytes={}, "
+          "shared_mem_limit={}, teams_per_block={}, team_size={}, "
+          "n_points={}, dims={}, k={}, nbs1=({}, {}), nbs2=({}, {})",
+          grid_warp_points.x, grid_warp_points.y, grid_warp_points.z,
+          warp_block.x, warp_block.y, warp_block.z, ck_shared_bytes,
+          device_prop.sharedMemPerBlock, n_teams_per_block, k_team_size,
+          n_points, pstore.n_cols(), k, nbs1.n_rows(), nbs1.n_cols(),
+          nbs2.n_rows(), nbs2.n_cols());
       hipLaunchKernelGGL(
           (find_new_neighbor_candidates<IDType, FEType, DistType, DistOp>),
-          grid_warp_points, block, ck_shared_bytes, nullptr, nbs1, nbs2, pstore,
-          candidate_ids.get_view(), candidate_dists.get_view(),
+          grid_warp_points, warp_block, ck_shared_bytes, nullptr, nbs1, nbs2,
+          pstore, candidate_ids.get_view(), candidate_dists.get_view(),
           candidate_counts, knng_ids, knng_dists);
       SALTATLAS_HIP_CHECK(hipGetLastError());
       SALTATLAS_HIP_CHECK(hipDeviceSynchronize());
@@ -933,9 +946,31 @@ std::pair<matrix<IDType>, matrix<DistType>> build_index(
   SALTATLAS_HIP_CHECK(hipGetDevice(&device_index));
   hipDeviceProp_t device_prop{};
   SALTATLAS_HIP_CHECK(hipGetDeviceProperties(&device_prop, device_index));
+  spdlog::trace(
+      "NN-Descent device limits: device={}, warp_size={}, "
+      "max_threads_per_block={}, shared_mem_per_block={}, "
+      "max_grid=({}, {}, {})",
+      device_prop.name, device_prop.warpSize, device_prop.maxThreadsPerBlock,
+      device_prop.sharedMemPerBlock, device_prop.maxGridSize[0],
+      device_prop.maxGridSize[1], device_prop.maxGridSize[2]);
 
   assert(device_prop.warpSize == k_warp_size);
-  const dim3 block(k_nnd_block_size);
+  const size_t n_teams = static_cast<size_t>(k_warp_size / k_team_size);
+  const size_t shared_bytes_per_warp =
+      n_teams * static_cast<size_t>(k) * sizeof(IDType);
+  const size_t max_shared_mem_bytes =
+      static_cast<size_t>(device_prop.sharedMemPerBlock);
+  if (shared_bytes_per_warp > max_shared_mem_bytes) {
+    throw std::runtime_error(
+        "Neighbor check shared memory exceeds device limit even with a single "
+        "warp block. Reduce k or use smaller IDType.");
+  }
+  const size_t requested_n_warps_per_block =
+      static_cast<size_t>(k_nnd_block_size / k_warp_size);
+  const size_t n_warps_per_block = std::max<size_t>(
+      1, std::min(requested_n_warps_per_block,
+                  max_shared_mem_bytes / shared_bytes_per_warp));
+  const dim3 block(static_cast<unsigned int>(n_warps_per_block * k_warp_size));
   if (block.x < k_warp_size) {
     throw std::runtime_error("Block size must be at least warp size.");
   }
@@ -951,23 +986,32 @@ std::pair<matrix<IDType>, matrix<DistType>> build_index(
         "the block size.");
   }
   // Grid for single point per thread.
-  const dim3   grid_points(n_blocks);
-  const size_t n_warps_per_block = block.x / k_warp_size;
-  const size_t n_warp_blocks =
-      (n_points + n_warps_per_block - 1) / n_warps_per_block;
+  const dim3 grid_points(n_blocks);
+  const dim3 warp_block(k_warp_size);
+  // AMD's kernel dispatch packet represents the global work size in each
+  // dimension with a uint32_t. hipDeviceProp_t::maxGridSize reports a limit in
+  // blocks, so applying only that limit can still overflow when HIP converts
+  // grid.x * block.x to the global work size. The kernel's warp-stride loop
+  // preserves full point coverage when the grid is capped here.
+  const size_t max_warp_blocks_by_global_work_size =
+      static_cast<size_t>(std::numeric_limits<uint32_t>::max()) / warp_block.x;
+  const size_t max_warp_blocks_launch =
+      std::min(static_cast<size_t>(device_prop.maxGridSize[0]),
+               max_warp_blocks_by_global_work_size);
   const size_t n_warp_blocks_launch =
-      std::min(n_warp_blocks, static_cast<size_t>(device_prop.maxGridSize[0]));
+      std::min(n_points, max_warp_blocks_launch);
   if (n_warp_blocks_launch == 0) {
     throw std::runtime_error("Neighbor check launch grid size became zero.");
   }
   spdlog::trace("Device: {}, block size: {}, grid size: {}", device_prop.name,
                 block.x, grid_points.x);
-  if (n_warp_blocks_launch < n_warp_blocks) {
+  if (n_warp_blocks_launch < n_points) {
     spdlog::trace(
         "Capped neighbor-check warp grid blocks from {} to {}. Kernels will "
         "iterate over points in warp-stride loops to stay within launch "
-        "limits.",
-        n_warp_blocks, n_warp_blocks_launch);
+        "limits (device_grid_limit={}, global_work_size_limit={}).",
+        n_points, n_warp_blocks_launch, device_prop.maxGridSize[0],
+        max_warp_blocks_by_global_work_size);
   }
 
   // Grid for single point per warp.
@@ -1028,7 +1072,7 @@ std::pair<matrix<IDType>, matrix<DistType>> build_index(
 
   build_index_main_loop<IDType, FEType, DistType, DistOp>(
       pstore, k, p_new, p_old, delta, max_iterations, device_prop, grid_points,
-      grid_warp_points, block, n_blocks, knng_ids.get_view(),
+      grid_warp_points, block, warp_block, n_blocks, knng_ids.get_view(),
       knng_dists.get_view(), old_ng.get_view(), old_counts, new_ng.get_view(),
       new_counts, old_counts_wk, new_counts_wk);
   rec_time().stop();  // nnd_main_loop
