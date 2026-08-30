@@ -45,7 +45,7 @@ struct options {
   std::string knng_dump_dir;
   bool        dump_distance{false};
   bool        verbose{false};
-  bool        development_verbose{false};
+  bool        benchmark_verbose{false};
 
   template <typename out_stream_type>
   void show(out_stream_type& os) {
@@ -70,7 +70,7 @@ struct options {
 
 bool parse_options(int argc, char* argv[], options& opt, bool& show_usage) {
   int p;
-  while ((p = getopt(argc, argv, "i:p:f:k:a:n:F:r:d:G:DM:om:vVh")) != -1) {
+  while ((p = getopt(argc, argv, "i:p:f:k:a:n:F:r:d:G:DM:om:vBh")) != -1) {
     switch (p) {
       case 'i':
         opt.dataset_path = optarg;
@@ -117,8 +117,8 @@ bool parse_options(int argc, char* argv[], options& opt, bool& show_usage) {
       case 'v':
         opt.verbose = true;
         break;
-      case 'V':
-        opt.development_verbose = true;
+      case 'B':
+        opt.benchmark_verbose = true;
         break;
       case 'h':
         show_usage = true;
@@ -181,7 +181,9 @@ void show_usage(const char* prog_name) {
       << "  -D: Dump distances along with neighbor IDs when dumping KNNG. "
          "Only effective if -G is also specified."
       << std::endl;
+  std::cout << "  -B: Show benchmark results (default: false)" << std::endl;
   std::cout << "  -v: Verbose output (default: false)" << std::endl;
+  std::cout << "  -h: Show this help message" << std::endl;
 }
 
 int main(int argc, char* argv[]) {
@@ -248,18 +250,18 @@ int main(int argc, char* argv[]) {
 
       knng = solanet.build_index(paths, opt.dataset_format);
       comm.barrier();
+      spdlog::trace("Finished building KNNG");
     }
 
     if (opt.optimize) {
-      comm.cout0() << "\n====================" << std::endl;
-      comm.cout0() << "Optimize KNNG" << std::endl;
-      comm.cout0() << "====================" << std::endl;
       comm.barrier();
+      spdlog::trace("Optimize KNNG");
       rec_time().start("Optimization");
       solanet::optimize_knng<id_type, dist_type>(
           knng, solanet::get_partitioner<id_type>(comm.size()), comm,
           opt.max_degree, opt.verbose);
       comm.barrier();
+      spdlog::trace("Finished optimizing KNNG");
     }
 
 #ifndef NDEBUG
@@ -268,7 +270,7 @@ int main(int argc, char* argv[]) {
     }
 #endif
 
-    if (opt.development_verbose) {
+    if (opt.benchmark_verbose) {
       comm.cout0() << "\nTime table (seconds):" << std::endl;
       comm.cout0() << "Name:\tMin,\tMax,\tMean,\tStd" << std::endl;
       const auto& time_table = rec_time().get_time_table();
@@ -289,9 +291,7 @@ int main(int argc, char* argv[]) {
     }
 
     if (!opt.knng_dump_dir.empty()) {
-      comm.cout0() << "\n====================" << std::endl;
       spdlog::trace("Dump KNNG");
-      comm.cout0() << "====================" << std::endl;
       std::error_code ec;
       std::filesystem::create_directories(opt.knng_dump_dir, ec);
       comm.barrier();
@@ -301,10 +301,7 @@ int main(int argc, char* argv[]) {
     }
     comm.barrier();
 
-    comm.cout0() << "\n====================" << std::endl;
-    comm.cout0() << "Finished SOLANET" << std::endl;
-    comm.cout0() << "====================" << std::endl;
-    comm.barrier();
+    spdlog::trace("Finished");
   }
   ::MPI_Finalize();
   std::_Exit(EXIT_SUCCESS);
