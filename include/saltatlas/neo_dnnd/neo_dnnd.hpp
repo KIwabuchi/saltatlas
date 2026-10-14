@@ -811,6 +811,9 @@ class neo_dnnd {
         break;
       }
 
+      auto copied_iitr =
+          iitr;  // make a copy of id iterator at the start of this round
+
       std::vector<std::vector<id_type>> send_ids(m_comm.size());
       std::size_t                       n_sends = 0;
       for (; n_sends < m_fv_send_batch_size && iitr != ids_end;
@@ -826,8 +829,9 @@ class neo_dnnd {
       }
 
       // Fill send FVs buffer
-      for (std::size_t i = 0; i < n_sends; ++i, ++pitr) {
-        const auto owner = priv_owner(ids_begin[i]);
+      for (std::size_t i = 0; i < n_sends; ++i, ++pitr, ++copied_iitr) {
+        const auto id    = *copied_iitr;
+        const auto owner = priv_owner(id);
         if (pitr == points_end) {
           m_comm.cerr0() << "Error: less number of points than IDs."
                          << std::endl;
