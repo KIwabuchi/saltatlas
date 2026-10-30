@@ -74,7 +74,7 @@ class hip_allocator {
   void deallocate(T* p, size_t /*n*/) noexcept { free_hip_memory(p); }
 };
 
-// Allocate aligned array from shared memory
+// Get aligned array from 'already allocated' shared memory.
 // Advances the pointer accordingly
 // Returns the allocated pointer
 // Assumes that there is enough space in shared memory.

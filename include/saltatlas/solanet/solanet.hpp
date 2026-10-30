@@ -49,7 +49,9 @@
 #include "saltatlas/solanet/detail/omp_nn/nn_driver.hpp"
 #endif
 
+#ifdef SALTATLAS_SOLANET_APU
 #include "saltatlas/solanet/detail/apu_nn/nn_driver.hpp"
+#endif
 
 #define SALTATLAS_SOLANET_DOUBLE_BUFFERING 1
 
@@ -96,10 +98,12 @@ using solanet_engine_cuvs = basic_solanet_engine<IDType, FeatureElemType,
                                                  DistanceType, cuvs_nn::driver>;
 #endif
 
+#ifdef SALTATLAS_SOLANET_APU
 /// \brief SOLANET engine class using APU backend.
 template <typename IDType, typename FeatureElemType, typename DistanceType>
 using solanet_engine_apu =
     basic_solanet_engine<IDType, FeatureElemType, DistanceType, apu_nn::driver>;
+#endif
 
 /// \brief Basic SOLANET engine class implementation.
 template <typename IDType, typename FeatureElemType, typename DistanceType,
@@ -133,12 +137,13 @@ class basic_solanet_engine {
   // point store used by the data reader
   using reader_point_store_type = point_store<id_type, std::vector<fe_type>>;
 
-  using nn_driver          = NNDriver<id_type, fe_type, dist_type>;
-  using pstore_object_type = typename nn_driver::point_store_type;
-  using index_view_type    = typename nn_driver::index_view_type;
-  using pstore_view_type   = typename nn_driver::point_store_view_type;
-  using index_object_type  = typename nn_driver::index_type;
-  using index_nid_type     = typename nn_driver::index_nid_type;
+  using nn_driver            = NNDriver<id_type, fe_type, dist_type>;
+  using pstore_object_type   = typename nn_driver::point_store_type;
+  using index_view_type      = typename nn_driver::index_view_type;
+  using pstore_view_type     = typename nn_driver::point_store_view_type;
+  using index_object_type    = typename nn_driver::index_type;
+  using index_nid_type       = typename nn_driver::index_nid_type;
+  using group_index_nid_type = typename nn_driver::group_index_nid_type;
 
   // Todo: check which code requires id_type to be uint32_t
   // static_assert(std::is_same_v<id_type, uint32_t>, "id_type must be
@@ -339,22 +344,34 @@ class basic_solanet_engine {
     spdlog::trace("Create MPI Wins");
     rec_time().start("Create-MPI-Wins");
     auto pstore_comm = priv_create_mpi_win_for_pstore();
+    std::vector<id_type> mpi_index_nids;
+#ifdef SALTATLAS_SOLANET_CUVS
+    // cuVS keeps the working index on the GPU. MPI's shared-memory RMA path
+    // requires an address that the peer process can read as host memory.
+    mpi_index_nids.resize(local_index_obj.nids.size());
+    m_nn_driver.copy_index_nids_to_host(local_index_obj,
+                                        mpi_index_nids.data());
+    auto index_comm = priv_create_mpi_win_for_index(
+        mpi_index_nids.data(), mpi_index_nids.size() * sizeof(id_type));
+#else
     auto index_comm  = priv_create_mpi_win_for_index(
         local_index_obj.nids.data(),
         local_index_obj.nids.size() * sizeof(id_type));
+#endif
     m_comm.barrier();
     rec_time().stop();
 
     spdlog::info("Start binary-tree-based kNNG refinement");
     rec_time().start("Binary-merge-tree-refinement");
     priv_refine_knngs_binary_merge_tree(local_index_obj, pstore_comm,
-                                        index_comm, refine_final_n_groups);
+                                        index_comm, refine_final_n_groups,
+                                        mpi_index_nids);
     rec_time().stop();
 
     priv_show_dram_usage(__LINE__, false);
 
     spdlog::info("Start group-based flat kNNG refinement");
-    index_nid_type group_index_nids;
+    group_index_nid_type group_index_nids;
     rec_time().start("Merge-and-optimize-grouped-knng");
     priv_merge_and_optimize_group_knng(local_index_obj, group_index_nids,
                                        refine_final_n_groups, index_comm);
@@ -397,7 +414,9 @@ class basic_solanet_engine {
   void priv_refine_knngs_binary_merge_tree(index_object_type& local_index_obj,
                                            mpi::rdm_comm&     pstore_comm,
                                            mpi::rdm_comm&     index_comm,
-                                           const int refine_final_n_groups) {
+                                           const int refine_final_n_groups,
+                                           [[maybe_unused]] std::vector<id_type>&
+                                               mpi_index_nids) {
     const int index_k = static_cast<int>(local_index_obj.nids.n_cols());
     // Ranks are paired according to a binary merge tree.
     // Each rank pulls KNNGs from all ranks in the pair partition.
@@ -443,10 +462,9 @@ class basic_solanet_engine {
             pstores_recv_buf.get() + id_offsets[ri] * m_dims * sizeof(fe_type),
             knngs_recv_buf.get() + id_offsets[ri] * index_k * sizeof(id_type));
       }
-      for (int i = 0; i < target_ranks.size(); ++i) {
-        const int ri = (i + (m_comm.rank() % group_size)) % group_size;
-        priv_wait_pull_pstore_index(target_ranks[ri], pstore_comm, index_comm);
-      }
+      // Use wait_all() to allow MPI to make progress on all pending operations
+      pstore_comm.wait_all();
+      index_comm.wait_all();
       rec_time().stop();
 
       // Optimize pulled KNNG
@@ -467,7 +485,7 @@ class basic_solanet_engine {
       const int  effective_query_k =
           (m_opt.query_k > 0) ? m_opt.query_k : static_cast<int>(m_opt.k);
       auto query_result =
-          m_nn_driver.run_queries(local_pstore, trg_pstore, trg_index, false,
+          m_nn_driver.run_queries(local_pstore, trg_pstore, trg_index,
                                   m_opt.frontier_size, effective_query_k);
       rec_time().stop();
 
@@ -492,16 +510,22 @@ class basic_solanet_engine {
                                local_index_id_offset, local_index_obj);
       rec_time().stop();
 
+#ifdef SALTATLAS_SOLANET_CUVS
+      m_nn_driver.copy_index_nids_to_host(local_index_obj,
+                                          mpi_index_nids.data());
+      index_comm.sync();
+#endif
+
       rec_time().start("Wait-for-all-bt-merge");
       m_comm.barrier();
       rec_time().stop();
     }
   }
 
-  auto priv_merge_and_optimize_group_knng(index_object_type& local_index_obj,
-                                          index_nid_type&    group_index_nids,
-                                          const int      refine_final_n_groups,
-                                          mpi::rdm_comm& single_index_comm) {
+  auto priv_merge_and_optimize_group_knng(
+      index_object_type&    local_index_obj,
+      group_index_nid_type& group_index_nids, const int refine_final_n_groups,
+      mpi::rdm_comm& single_index_comm) {
     // We first pull all knngs from other ranks in the same group then optimize
     // it for query.
     const int    group_size       = m_comm.size() / refine_final_n_groups;
@@ -515,7 +539,8 @@ class basic_solanet_engine {
 
     spdlog::trace("Allocate receive buffers for group KNNG");
     rec_time().start("Allocate-recv-buffers-group-knng");
-    group_index_nids.reset(group_n_points, index_k);
+    m_nn_driver.allocate_group_index_nids(group_index_nids, group_n_points,
+                                          index_k);
     auto* knngs_recv_buf = group_index_nids.data();
     rec_time().stop();
 
@@ -542,12 +567,8 @@ class basic_solanet_engine {
       rec_time().stop();
 
       rec_time().start("Wait-index");
-      for (int offset = 0; offset < group_size; ++offset) {
-        const int trg_rank =
-            group_begin_rank +
-            (offset + (m_comm.rank() % group_size)) % group_size;
-        single_index_comm.wait(trg_rank);
-      }
+      // Use wait_all() to allow MPI to make progress on all pending operations
+      single_index_comm.wait_all();
       rec_time().stop();
     }
     rec_time().stop();
@@ -664,14 +685,10 @@ class basic_solanet_engine {
     /// Lambda for waiting for the pull to finish for a target group
     const auto wait_pull_for_target = [&](const refine_target_info& work) {
       rec_time().start("Pull-pstore-index-refine");
-      for (int i = 0; i < work.target_ranks.size(); ++i) {
-        const int ri = (i + (m_comm.rank() % group_size)) % group_size;
-        priv_wait_pull_pstore(work.target_ranks[ri], pstore_comm);
-        if (i == 0) {
-          // Index data is already merged.
-          priv_wait_pull_index(work.target_ranks[ri], group_index_comm);
-        }
-      }
+      // Use wait_all() to allow MPI to make progress on all pending operations
+      // simultaneously, preventing UCX timeouts when multiple ranks are waiting
+      pstore_comm.wait_all();
+      group_index_comm.wait_all();
       rec_time().stop();
     };
 
@@ -689,7 +706,7 @@ class basic_solanet_engine {
       rec_time().start("Run-queries-refine");
       const auto local_pstore = priv_make_local_pstore_view();
       auto       results =
-          m_nn_driver.run_queries(local_pstore, trg_pstore, trg_index, false,
+          m_nn_driver.run_queries(local_pstore, trg_pstore, trg_index,
                                   m_opt.frontier_size, effective_query_k);
       rec_time().stop();
       rec_time().start("Refine-index-with-queries-results");
@@ -841,20 +858,30 @@ class basic_solanet_engine {
     return global_o2e_id_map;
   }
 
+  // Master index
+  // Holds the best known neighbors so far.
+  // Neighbors are not limited to local points. Their IDs are the
+  // offset-based ones.
   sparse_knng_type priv_conv_to_final_graph(
       const std::vector<id_type>& global_o2e_id_map,
-      index_object_type&          master_index_obj) {
+      const index_object_type&    master_index_obj) {
     sparse_knng_type final_knng;
     auto             n_points = m_l2e_id_table.size();
     final_knng.reserve(n_points);
 
     rec_time().start("Copy-master-knng2host");
-    // Master index
-    // Holds the best known neighbors so far.
-    // Neighbors are not limited to local points. Their IDs are the
-    // offset-based ones.
+    // todo: brush up on implementation
+#if defined(SALTATLAS_SOLANET_CUVS)
+    // master index is on the CUVS device
+    // need to copy it to the host memory first
+    const auto h_master_index_obj =
+        m_nn_driver.copy_index_to_host(master_index_obj);
+    index_view_type host_master_index =
+        m_nn_driver.make_index_view(h_master_index_obj);
+#elif defined(SALTATLAS_SOLANET_APU)
     index_view_type host_master_index =
         m_nn_driver.make_index_view(master_index_obj);
+#endif
     rec_time().stop();
 
     rec_time().start("Allocate-final-knng");

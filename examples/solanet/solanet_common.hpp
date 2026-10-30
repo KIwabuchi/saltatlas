@@ -27,9 +27,10 @@
 #endif
 
 #ifdef SALTATLAS_SOLANET_CUVS
-#include <rmm/mr/device/device_memory_resource.hpp>
-#include <rmm/mr/device/logging_resource_adaptor.hpp>
-#include <rmm/mr/device/pool_memory_resource.hpp>
+#include <cuda_runtime.h>
+#include <rmm/cuda_device.hpp>
+#include <rmm/mr/per_device_resource.hpp>
+#include <rmm/mr/pool_memory_resource.hpp>
 #endif
 
 #include <metall/detail/memory.hpp>
@@ -71,11 +72,6 @@ using knng_type      = typename solanet_engine::sparse_knng_type;
 using neighbor_type  = typename solanet_engine::neighbor_type;
 using dist_func_type = distance::distance_function_type<fe_type, dist_type>;
 
-#if defined(SALTATLAS_SOLANET_CUVS) || defined(SALTATLAS_SOLANET_APU)
-using rmm_mem_pool_t =
-    rmm::mr::pool_memory_resource<rmm::mr::device_memory_resource>;
-#endif
-
 inline void setup_spdlog(std::ostream& os, const bool verbose = false) {
   auto ostream_sink = std::make_shared<spdlog::sinks::ostream_sink_mt>(os);
 
@@ -103,47 +99,11 @@ inline void show_common_config(mpi::communicator& comm) {
 #endif
 }
 
-#if defined(SALTATLAS_SOLANET_CUVS) || defined(SALTATLAS_SOLANET_APU)
+#ifdef SALTATLAS_SOLANET_CUVS
 inline void show_gpu_config(mpi::communicator& comm) {
   comm.cout0() << saltatlas::solanet::gpu::get_cuvs_gpu_info(
                       comm.node_local_rank())
                << std::endl;
-}
-
-// If dev_pool_size_gb <= 0, set the pool size automatically
-inline std::unique_ptr<rmm_mem_pool_t> setup_rmm_pool(
-    const double dev_pool_size_gb, mpi::communicator& comm) {
-  const auto [avail, total] = rmm::available_device_memory();
-  comm.cout0() << "Available device memory (GB): " << avail / (double)(1 << 30)
-               << std::endl;
-  comm.cout0() << "Total device memory (GB): " << total / (double)(1 << 30)
-               << std::endl;
-
-  // Set up device memory pool for cuvs
-  // 4 -> 4 GPUs per node
-  comm.cout0() << "Setting up rmm pool, assuming 4 GPUs per node " << std::endl;
-  const auto n_ranks_per_node = comm.node_size();
-  int        n_ranks_per_device =
-      (n_ranks_per_node <= 4) ? 1 : (n_ranks_per_node + 4 - 1) / 4;
-  double dev_pool_size = 0;
-  if (dev_pool_size_gb > 0) {
-    dev_pool_size = dev_pool_size_gb * (1ULL << 30);
-  } else {
-    // Use 80% of GPU mem
-    dev_pool_size = rmm::percent_of_free_device_memory(80 / n_ranks_per_device);
-  }
-  comm.cout0() << "Per rank dev pool size (GB): "
-               << (double)dev_pool_size / (double)(1 << 30) << std::endl;
-  comm.barrier();
-  auto pool = std::make_unique<rmm_mem_pool_t>(
-      rmm::mr::get_current_device_resource(), dev_pool_size);
-  rmm::mr::set_current_device_resource(pool.get());
-
-  // std::string                       filename{"logs-solanet-cuda.csv"};
-  // rmm::mr::logging_resource_adaptor log_mr{
-  //     rmm::mr::get_current_device_resource(), filename, true};
-
-  return pool;
 }
 #endif
 
@@ -182,6 +142,39 @@ void setup_apu(mpi::communicator& comm, const bool verbose = false) {
   //       << std::endl;
   //   comm.abort();
   // }
+}
+#endif
+
+#ifdef SALTATLAS_SOLANET_CUVS
+void setup_cuda_gpu(mpi::communicator& comm, const bool verbose = false) {
+  int         device_count = 0;
+  cudaError_t err          = cudaGetDeviceCount(&device_count);
+  if (err != cudaSuccess || device_count == 0) {
+    comm.cerr() << "No CUDA device found." << std::endl;
+    comm.abort();
+  }
+
+  int gpu_id = comm.node_local_rank() % device_count;
+  err        = cudaSetDevice(gpu_id);
+  if (err != cudaSuccess) {
+    comm.cerr() << "Failed to set CUDA device " << gpu_id << std::endl;
+    comm.abort();
+  }
+
+  cudaDeviceProp prop;
+  err = cudaGetDeviceProperties(&prop, gpu_id);
+  if (err != cudaSuccess) {
+    comm.cerr() << "Failed to get CUDA device properties for device " << gpu_id
+                << std::endl;
+    comm.abort();
+  }
+
+  if (verbose) {
+    comm.cout() << " GPU " << gpu_id << " / " << device_count << ", "
+                << prop.name << ", "
+                << (float)prop.totalGlobalMem / (1ULL << 30) << " GB"
+                << std::endl;
+  }
 }
 #endif
 

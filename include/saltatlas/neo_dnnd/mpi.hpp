@@ -817,6 +817,41 @@ class rdm_comm {
     m_requests.erase(it);
   }
 
+  void wait_all() {
+    // Collect all pending requests into a flat vector for MPI_Waitall
+    std::vector<MPI_Request> all_requests;
+    all_requests.reserve(m_requests.size() * 10);  // rough estimate
+    for (auto& [rank, requests] : m_requests) {
+      for (auto& request : requests) {
+        if (request != MPI_REQUEST_NULL) {
+          all_requests.push_back(request);
+        }
+      }
+    }
+    if (!all_requests.empty()) {
+      DNND2_CHECK_MPI(::MPI_Waitall(all_requests.size(), all_requests.data(),
+                                     MPI_STATUSES_IGNORE));
+    }
+    m_requests.clear();
+  }
+
+  void flush_all() {
+    // Flush all windows to ensure remote completion
+    for (auto& win : m_sub_wins) {
+      if (win != MPI_WIN_NULL) {
+        DNND2_CHECK_MPI(::MPI_Win_flush_all(win));
+      }
+    }
+  }
+
+  void sync() {
+    for (auto& win : m_sub_wins) {
+      if (win != MPI_WIN_NULL) {
+        DNND2_CHECK_MPI(::MPI_Win_sync(win));
+      }
+    }
+  }
+
  private:
   void priv_create(const void* const base, const std::size_t size,
                    MPI_Info info = MPI_INFO_NULL) {

@@ -4,19 +4,20 @@
 // SPDX-License-Identifier: MIT
 
 #include <cstdlib>
+#include <optional>
 #include <type_traits>
 
-#if __has_include(<cuda_runtime.h>)
-#include <cuda_runtime.h>
-#endif
+// #if __has_include(<cuda_runtime.h>)
+// #include <cuda_runtime.h>
+// #endif
 
-#if __has_include(<cuvs/neighbors/cagra.hpp>)
-#include <cuvs/neighbors/cagra.hpp>
-#endif
+// #if __has_include(<cuvs/neighbors/cagra.hpp>)
+// #include <cuvs/neighbors/cagra.hpp>
+// #endif
 
-#if __has_include(<cuvs/neighbors/cagra_graph.hppp>)
-#include <cuvs/neighbors/cagra_graph.hppp>
-#endif
+// #if __has_include(<cuvs/neighbors/cagra_graph.hppp>)
+// #include <cuvs/neighbors/cagra_graph.hppp>
+// #endif
 
 #include <raft/core/device_mdarray.hpp>
 #include <raft/core/device_resources.hpp>
@@ -25,19 +26,73 @@
 #include <raft/core/resources.hpp>
 #include <raft/util/cudart_utils.hpp>
 
+#if defined(SALTATLAS_SOLANET_CUVS)
 #include "saltatlas/solanet/detail/cuvs_nn/utils.hpp"
+#elif defined(SALTATLAS_SOLANET_APU)
+#include "saltatlas/solanet/detail/apu_nn/utils.hpp"
+#endif
 
-namespace saltatlas::solanet::cuvs_nn {
+namespace saltatlas::solanet::raft_utils {
 
 using raft_index_t = int64_t;
+
+template <typename MatrixT>
+class matrix {
+ public:
+  using element_type = typename MatrixT::element_type;
+
+  matrix() = default;
+  matrix(MatrixT&& value, raft::device_resources* device_res = nullptr)
+      : m_value(std::move(value)), m_device_res(device_res) {}
+
+  matrix(matrix&&) noexcept            = default;
+  matrix& operator=(matrix&&) noexcept = default;
+  matrix(const matrix&)                = delete;
+  matrix& operator=(const matrix&)     = delete;
+
+  matrix& operator=(MatrixT&& value) {
+    m_value = std::move(value);
+    return *this;
+  }
+
+  [[nodiscard]] size_t n_rows() const { return extent(0); }
+  [[nodiscard]] size_t n_cols() const { return extent(1); }
+  [[nodiscard]] size_t extent(const size_t dim) const {
+    return m_value ? m_value->extent(dim) : 0;
+  }
+  [[nodiscard]] size_t size() const { return m_value ? m_value->size() : 0; }
+  [[nodiscard]] element_type*       data() { return data_handle(); }
+  [[nodiscard]] const element_type* data() const { return data_handle(); }
+  [[nodiscard]] element_type*       data_handle() {
+    return m_value ? m_value->data_handle() : nullptr;
+  }
+  [[nodiscard]] const element_type* data_handle() const {
+    return m_value ? m_value->data_handle() : nullptr;
+  }
+  [[nodiscard]] auto view() { return m_value->view(); }
+  [[nodiscard]] auto view() const { return m_value->view(); }
+  void               reset() { m_value.reset(); }
+  void               reset(const size_t n_rows, const size_t n_cols) {
+    if (m_device_res == nullptr) {
+      throw std::logic_error("Only device matrices support reset(rows, cols).");
+    }
+    m_value = raft::make_device_matrix<element_type, raft_index_t>(
+        *m_device_res, n_rows, n_cols);
+  }
+
+ private:
+  std::optional<MatrixT>  m_value;
+  raft::device_resources* m_device_res{nullptr};
+};
+
 template <typename T>
-using d_matrix_type = raft::device_matrix<T, raft_index_t>;
+using d_matrix_type = matrix<raft::device_matrix<T, raft_index_t>>;
 
 template <typename T>
 using d_matrix_view_type = raft::device_matrix_view<T, raft_index_t>;
 
 template <typename T>
-using h_matrix_type = raft::pinned_matrix<T, raft_index_t>;
+using h_matrix_type = matrix<raft::pinned_matrix<T, raft_index_t>>;
 
 template <typename T>
 using h_matrix_view_type = raft::host_matrix_view<T, raft_index_t>;
@@ -53,7 +108,9 @@ template <typename T>
 inline d_matrix_type<T> make_dev_matrix(const size_t            n_rows,
                                         const size_t            n_cols,
                                         raft::device_resources& dev_res) {
-  return raft::make_device_matrix<T, raft_index_t>(dev_res, n_rows, n_cols);
+  return d_matrix_type<T>(
+      raft::make_device_matrix<T, raft_index_t>(dev_res, n_rows, n_cols),
+      &dev_res);
 }
 
 template <typename MatrixT>
@@ -152,7 +209,8 @@ inline auto copy_to_dev(MatrixViewT             h_matrix_view,
   return d_matrix;
 }
 
-/// Allocate and copy matrix to device
+/// Allocate and copy matrix from host to device, shrinking the number of
+/// columns.
 /// colms_to_skip: #of columns to skip copying.
 template <typename MatrixViewT>
 inline auto strided_copy_to_dev(MatrixViewT             matrix_view,
@@ -173,4 +231,26 @@ inline auto strided_copy_to_dev(MatrixViewT             matrix_view,
 
   return d_matrix;
 }
-}  // namespace saltatlas::solanet::cuvs_nn
+
+/// Allocate and copy a matrix that already resides on the device to another
+/// device matrix, shrinking the number of columns.
+template <typename MatrixViewT>
+inline auto strided_copy_dev_to_dev(MatrixViewT             matrix_view,
+                                    const size_t            n_colms_to_copy,
+                                    raft::device_resources& dev_res) {
+  using T = std::remove_const_t<typename MatrixViewT::element_type>;
+  if (n_colms_to_copy > size_t(matrix_view.extent(1))) {
+    std::cerr << "Too large to copy " << n_colms_to_copy << " size"
+              << std::endl;
+    std::abort();
+  }
+  auto d_matrix =
+      make_dev_matrix<T>(matrix_view.extent(0), n_colms_to_copy, dev_res);
+
+  gpu::copy_device_to_device_2d(d_matrix.data_handle(), n_colms_to_copy,
+                                matrix_view.data_handle(),
+                                matrix_view.extent(1), matrix_view.extent(0));
+
+  return d_matrix;
+}
+}  // namespace saltatlas::solanet::raft_utils

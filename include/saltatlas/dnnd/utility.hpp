@@ -11,6 +11,7 @@
 #include <limits>
 #include <numeric>
 #include <tuple>
+#include <type_traits>
 #include <unordered_set>
 #include <vector>
 
@@ -516,6 +517,20 @@ inline void dump_knng(const std::filesystem::path &knng_out_path,
   }
 
   for (const auto &elem : knng) {
+#ifndef NDEBUG
+    // check for duplicate neighbors in debug mode
+    std::unordered_set<
+        std::remove_cv_t<std::remove_reference_t<decltype(elem.first)>>>
+        neighbor_set;
+    for (const auto &neighbor : elem.second) {
+      if (neighbor_set.find(neighbor.id) != neighbor_set.end()) {
+        std::cerr << "Duplicate neighbor ID " << neighbor.id << " for point "
+                  << elem.first << std::endl;
+        std::abort();
+      }
+      neighbor_set.insert(neighbor.id);
+    }
+#endif
     ofs << elem.first;
     for (const auto &neighbor : elem.second) {
       ofs << " " << neighbor.id;

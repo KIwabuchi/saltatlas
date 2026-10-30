@@ -28,4 +28,12 @@ if (SALTATLAS_USE_CUVS)
 
     add_fe_typed_exe(run_cuvs_single_gpu_nndescent uint8_t)
     setup_cuvs_target(${target_name})
+
+    add_fe_typed_ygm_exe(run_solanet_cuda_gpu float)
+    setup_cuvs_target(${target_name})
+    target_link_libraries(${target_name} PRIVATE cuvs_utils)
+
+    add_fe_typed_ygm_exe(run_solanet_cuda_gpu uint8_t)
+    setup_cuvs_target(${target_name})
+    target_link_libraries(${target_name} PRIVATE cuvs_utils)
 endif()
